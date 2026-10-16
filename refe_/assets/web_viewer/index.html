@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+    content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0, minimum-scale=1.0">
+  <title>Visualizador BIM 3D Viewport</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+    }
+
+    body,
+    html {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background-color: #0F172A;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    #viewer-container {
+      width: 100vw;
+      height: 100vh;
+      position: absolute;
+      top: 0;
+      left: 0;
+      overflow: hidden;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      outline: none;
+    }
+
+    #hud-info {
+      display: none;
+    }
+
+    .hud-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: #2563EB;
+    }
+  </style>
+
+  <!-- Resiliência para carregamento de WebAssembly (.wasm) -->
+  <script>
+    (function () {
+      const _origFetch = window.fetch;
+      window.fetch = async function (url, options) {
+        try {
+          const res = await _origFetch(url, options);
+          if (res.ok) return res;
+        } catch (e) {
+          console.warn('[Fetch Interceptor] Fallback para XHR ao carregar:', url);
+        }
+        return new Promise(function (resolve, reject) {
+          const xhr = new XMLHttpRequest();
+          xhr.open('GET', url, true);
+          xhr.responseType = 'arraybuffer';
+          xhr.onload = function () {
+            if (xhr.status === 200 || (xhr.status === 0 && xhr.response && xhr.response.byteLength > 0)) {
+              const headers = new Headers();
+              headers.set('Content-Type', 'application/wasm');
+              resolve(new Response(xhr.response, {
+                status: 200,
+                statusText: 'OK',
+                headers: headers
+              }));
+            } else {
+              reject(new Error('Falha XHR ao buscar arquivo wasm: ' + xhr.status));
+            }
+          };
+          xhr.onerror = function () {
+            reject(new Error('Erro de rede XHR ao buscar: ' + url));
+          };
+          xhr.send();
+        });
+      };
+    })();
+  </script>
+
+  <!-- Bibliotecas 3D Offline Locais -->
+  <script src="three.min.js"></script>
+  <script src="BufferGeometryUtils.js"></script>
+  <script src="OrbitControls.js"></script>
+  <script src="GLTFLoader.js"></script>
+  <script src="web-ifc-api-iife.js"></script>
+  <script src="IFCLoader.js"></script>
+</head>
+
+<body>
+  <div id="viewer-container"></div>
+  <div id="hud-info">
+    <div class="hud-dot"></div>
+    <span id="hud-text">ThatOpen Engine • WebGL 3D</span>
+  </div>
+
+  <!-- Motor do Visualizador e JS Bridge -->
+  <script src="viewer.js"></script>
+</body>
+
+</html>
