@@ -233,6 +233,8 @@ void main() {
         'expressID': 105,
         'name': 'Pilar P1 - Concreto',
         'category': 'IfcColumn',
+        'subIds': [101, 102],
+        'isComposite': true,
         'psets': {
           'Pset_Dimensions': {
             'Largura': '0.50 m',
@@ -249,6 +251,8 @@ void main() {
       expect(metadata.expressID, 105);
       expect(metadata.name, 'Pilar P1 - Concreto');
       expect(metadata.category, 'IfcColumn');
+      expect(metadata.isComposite, isTrue);
+      expect(metadata.subIds, [101, 102]);
       expect(metadata.psets.containsKey('Pset_Dimensions'), isTrue);
       expect(metadata.psets['Pset_Dimensions']['Largura'], '0.50 m');
     });
@@ -286,10 +290,24 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('Viga Estrutural V1'), findsOneWidget);
-      expect(find.text('IfcBeam'), findsOneWidget);
-      expect(find.text('ExpressID: #201'), findsOneWidget);
+      expect(find.textContaining('IfcBeam'), findsOneWidget);
+      expect(find.textContaining('ExpressID: #201'), findsOneWidget);
       expect(find.text('Pset_Structural'), findsOneWidget);
       expect(find.text('Viga Principal'), findsOneWidget);
+    });
+
+    test('Viewer3DController hidden elements tracking and preview state', () async {
+      final controller = Viewer3DController();
+
+      expect(controller.hasHiddenElements, isFalse);
+      expect(controller.hiddenCount, 0);
+      expect(controller.isGhostPreviewActive, isFalse);
+
+      await controller.setGhostPreview(true);
+      expect(controller.isGhostPreviewActive, isTrue);
+
+      await controller.setGhostPreview(false);
+      expect(controller.isGhostPreviewActive, isFalse);
     });
 
     test('Viewer3DController initial state and handlers', () {

@@ -11,20 +11,27 @@ class BimElementMetadata {
   final String name;
   final String category;
   final Map<String, dynamic> psets;
+  final List<int> subIds;
+  final bool isComposite;
 
   const BimElementMetadata({
     required this.expressID,
     required this.name,
     required this.category,
     required this.psets,
+    this.subIds = const [],
+    this.isComposite = false,
   });
 
   factory BimElementMetadata.fromMap(Map<String, dynamic> map) {
+    final subIdsRaw = (map['subIds'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
     return BimElementMetadata(
       expressID: (map['expressID'] as num?)?.toInt() ?? 0,
       name: map['name']?.toString() ?? 'Elemento Desconhecido',
       category: map['category']?.toString() ?? 'IfcBuildingElementProxy',
       psets: (map['psets'] as Map?)?.cast<String, dynamic>() ?? {},
+      subIds: subIdsRaw,
+      isComposite: map['isComposite'] == true || subIdsRaw.length > 1,
     );
   }
 
@@ -46,14 +53,36 @@ class BimElementMetadata {
     return result;
   }
 
-  /// Retorna o nome amigável e limpo para visualização.
-  String get displayName {
+  /// Retorna o nome amigável e limpo para visualização na maquete de bolso.
+  String get displayName => cleanTitle;
+
+  /// Extrai o nome do tipo limpo (ex: "Telhado básico:Telhado ventilado - Concreto:331235" -> "Telhado ventilado - Concreto")
+  String get cleanTitle {
     final decoded = decodeIfcString(name).trim();
     if (decoded.isEmpty || decoded == 'null') {
       return '$friendlyCategory #$expressID';
     }
-    // Remove códigos longos entre colchetes no final do Revit (ex: "Parede [123456]" -> "Parede")
-    return decoded.replaceAll(RegExp(r'\s*\[\d+\]$'), '');
+    final withoutBrackets = decoded.replaceAll(RegExp(r'\s*\[\d+\]$'), '');
+    if (withoutBrackets.contains(':')) {
+      final parts = withoutBrackets.split(':').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      if (parts.length >= 2 && !RegExp(r'^\d+$').hasMatch(parts[1])) {
+        return parts[1];
+      }
+      return parts[0];
+    }
+    return withoutBrackets;
+  }
+
+  /// Família / Categoria do Revit (ex: "Telhado básico", "Parede básica")
+  String? get familyName {
+    final decoded = decodeIfcString(name).trim();
+    if (decoded.contains(':')) {
+      final parts = decoded.split(':').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+      if (parts.length >= 2 && !RegExp(r'^\d+$').hasMatch(parts[1])) {
+        return parts[0];
+      }
+    }
+    return null;
   }
 
   /// Tradução amigável da categoria IFC para português.
@@ -91,7 +120,19 @@ class BimElementMetadata {
     return Icons.view_in_ar_rounded;
   }
 
-  /// Extrai as métricas de obra mais úteis (Área, Volume, Dimensões, Nível).
+  /// Formata números decimais para o padrão da construção civil brasileira (ex: 279,42 m²)
+  static String formatNumberWithUnit(dynamic val, String unit) {
+    if (val == null) return 'N/A';
+    final strVal = val.toString().trim();
+    final numVal = double.tryParse(strVal.replaceAll(',', '.'));
+    if (numVal != null) {
+      final formatted = numVal.toStringAsFixed(2).replaceAll('.', ',');
+      return '$formatted $unit';
+    }
+    return strVal.endsWith(unit) ? strVal : '$strVal $unit';
+  }
+
+  /// Extrai as métricas de obra mais úteis (Área, Volume, Dimensões, Nível, Inclinação).
   Map<String, String> get keyMetrics {
     final Map<String, String> metrics = {};
 
@@ -101,17 +142,20 @@ class BimElementMetadata {
           final key = entry.key.toString().toLowerCase();
           final val = decodeIfcString(entry.value.toString()).trim();
 
-          if (metrics.length < 3) {
-            if (key.contains('area') || key.contains('área')) {
-              metrics['Área'] = val.endsWith('m²') ? val : '$val m²';
+          if (metrics.length < 4) {
+            if (key.contains('totalarea') || key == 'area' || key.contains('área')) {
+              metrics['Área Total'] = formatNumberWithUnit(val, 'm²');
             } else if (key.contains('volume')) {
-              metrics['Volume'] = val.endsWith('m³') ? val : '$val m³';
+              metrics['Volume'] = formatNumberWithUnit(val, 'm³');
+            } else if (key.contains('pitch') || key.contains('inclina')) {
+              final numVal = double.tryParse(val.replaceAll(',', '.'));
+              metrics['Caimento'] = numVal != null ? '${numVal.toStringAsFixed(0)}°' : '$val°';
             } else if (key.contains('length') || key.contains('comprimento')) {
-              metrics['Comp.'] = val.endsWith('m') ? val : '$val m';
+              metrics['Comprimento'] = formatNumberWithUnit(val, 'm');
             } else if (key.contains('height') || key.contains('altura')) {
-              metrics['Altura'] = val.endsWith('m') ? val : '$val m';
+              metrics['Altura'] = formatNumberWithUnit(val, 'm');
             } else if (key.contains('width') || key.contains('espessura') || key.contains('largura')) {
-              metrics['Espes.'] = val.endsWith('m') || val.endsWith('cm') ? val : '$val m';
+              metrics['Espessura'] = formatNumberWithUnit(val, 'm');
             } else if (key.contains('level') || key.contains('nível') || key.contains('pavimento')) {
               metrics['Nível'] = val;
             }
@@ -120,9 +164,13 @@ class BimElementMetadata {
       }
     }
 
+    if (isComposite && !metrics.containsKey('Composição')) {
+      metrics['Composição'] = '${subIds.length} partes';
+    }
+
     if (metrics.isEmpty) {
-      metrics['Item'] = '#$expressID';
-      metrics['Tipo'] = friendlyCategory;
+      metrics['Elemento'] = '#$expressID';
+      metrics['Categoria'] = friendlyCategory;
       metrics['Status'] = 'As-Built';
     }
 
@@ -138,6 +186,10 @@ class Viewer3DController extends ChangeNotifier {
   double _loadingProgress = 0.0;
   String? _errorMessage;
   BimElementMetadata? _selectedElement;
+  final Set<int> _hiddenElementIds = {};
+  final Map<int, BimElementMetadata> _hiddenElementsMap = {};
+  bool _isGhostPreviewActive = false;
+  int? _isolatedElementId;
 
   String? _pendingFilePath;
   String? _pendingFormat;
@@ -148,6 +200,25 @@ class Viewer3DController extends ChangeNotifier {
   double get loadingProgress => _loadingProgress;
   String? get errorMessage => _errorMessage;
   BimElementMetadata? get selectedElement => _selectedElement;
+  Set<int> get hiddenElementIds => Set.unmodifiable(_hiddenElementIds);
+  bool get hasHiddenElements => _hiddenElementIds.isNotEmpty;
+  bool get isGhostPreviewActive => _isGhostPreviewActive;
+  List<BimElementMetadata> get hiddenElements {
+    return _hiddenElementIds.map((id) {
+      return _hiddenElementsMap[id] ??
+          BimElementMetadata(
+            expressID: id,
+            name: 'Elemento BIM #$id',
+            category: 'IfcBuildingElement',
+            psets: {},
+          );
+    }).toList();
+  }
+  int? get isolatedElementId => _isolatedElementId;
+  bool get isIsolated => _isolatedElementId != null;
+  int get hiddenCount => _hiddenElementIds.length;
+  bool isHidden(int expressID) => _hiddenElementIds.contains(expressID);
+  bool isElementIsolated(int expressID) => _isolatedElementId == expressID;
 
   /// Registra o InAppWebViewController e configura a JS Bridge bidirecional.
   void setWebViewController(InAppWebViewController controller) {
@@ -201,7 +272,32 @@ class Viewer3DController extends ChangeNotifier {
       },
     );
 
-    // 4. Captura defensiva de erros na renderização WebGL
+    // 4. Elemento deselecionado (ex: toque no fundo vazio do 3D)
+    controller.addJavaScriptHandler(
+      handlerName: 'onElementDeselected',
+      callback: (args) {
+        if (_selectedElement != null) {
+          _selectedElement = null;
+          notifyListeners();
+        }
+      },
+    );
+
+    // 5. Atualização de visibilidade consolidada (ocultação / isolamento)
+    controller.addJavaScriptHandler(
+      handlerName: 'onVisibilityChanged',
+      callback: (args) {
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          final isIsolated = data['isIsolated'] == true;
+          final isolatedId = (data['isolatedId'] as num?)?.toInt();
+          _isolatedElementId = isIsolated ? isolatedId : null;
+          notifyListeners();
+        }
+      },
+    );
+
+    // 6. Captura defensiva de erros na renderização WebGL
     controller.addJavaScriptHandler(
       handlerName: 'onViewerError',
       callback: (args) {
@@ -221,6 +317,10 @@ class Viewer3DController extends ChangeNotifier {
     _loadingProgress = 5.0;
     _errorMessage = null;
     _selectedElement = null;
+    _hiddenElementIds.clear();
+    _hiddenElementsMap.clear();
+    _isolatedElementId = null;
+    _isGhostPreviewActive = false;
     notifyListeners();
 
     if (!_isViewerReady || _webViewController == null) {
@@ -265,9 +365,85 @@ class Viewer3DController extends ChangeNotifier {
     }
   }
 
-  /// Limpa a seleção do elemento atual.
-  void clearSelectedElement() {
+  /// Oculta o elemento atualmente selecionado no motor 3D e retorna seus metadados.
+  Future<BimElementMetadata?> hideSelectedElement() async {
+    if (_selectedElement == null) return null;
+    final element = _selectedElement!;
+    _hiddenElementIds.add(element.expressID);
+    _hiddenElementsMap[element.expressID] = element;
+    if (_isolatedElementId == element.expressID) {
+      _isolatedElementId = null;
+    }
     _selectedElement = null;
     notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.hideElement(${element.expressID});',
+    );
+    return element;
+  }
+
+  /// Reexibe um elemento específico previamente ocultado.
+  Future<void> showElement(int expressID) async {
+    _hiddenElementIds.remove(expressID);
+    _hiddenElementsMap.remove(expressID);
+    if (_hiddenElementIds.isEmpty) {
+      _isGhostPreviewActive = false;
+    }
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.showElement($expressID);',
+    );
+  }
+
+  /// Isola o elemento selecionado, ocultando todos os outros elementos da cena 3D.
+  /// Se o mesmo elemento já estiver isolado, restaura a visibilidade normal.
+  Future<void> isolateSelectedElement() async {
+    if (_selectedElement == null) return;
+    final id = _selectedElement!.expressID;
+    if (_isolatedElementId == id) {
+      _isolatedElementId = null;
+    } else {
+      _isolatedElementId = id;
+    }
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.isolateElement($id);',
+    );
+  }
+
+  /// Restaura a visibilidade completa do modelo (desfaz isolamentos e ocultações).
+  Future<void> restoreAllVisibility() async {
+    _hiddenElementIds.clear();
+    _hiddenElementsMap.clear();
+    _isolatedElementId = null;
+    _isGhostPreviewActive = false;
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.restoreAllVisibility();',
+    );
+  }
+
+  /// Ativa ou desativa a pré-visualização translúcida fantasma (raio-X) dos elementos ocultos no 3D.
+  Future<void> setGhostPreview(bool active) async {
+    _isGhostPreviewActive = active;
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.previewHiddenElements($active);',
+    );
+  }
+
+  /// Limpa a seleção do elemento atual sincronizando com o JavaScript.
+  Future<void> clearSelectedElement() async {
+    _selectedElement = null;
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.clearSelection();',
+    );
   }
 }

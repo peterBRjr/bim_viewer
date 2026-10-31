@@ -1,5 +1,8 @@
+import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../../core/constants/app_colors.dart';
@@ -7,7 +10,9 @@ import '../../../../core/constants/app_typography.dart';
 import '../../../../core/services/localhost_server_service.dart';
 import '../../../home/domain/models/project_model.dart';
 import '../controllers/viewer_3d_controller.dart';
-import '../widgets/bim_inspector_panel.dart';
+import '../widgets/bim_metadata_bottom_sheet.dart';
+import '../widgets/hidden_elements_bottom_sheet.dart';
+import '../widgets/bim_tabbar.dart';
 
 /// Tela do Visualizador 3D baseada em ThatOpen Engine (@thatopen/components / Three.js).
 /// Executa a Viewport WebGL em InAppWebView com JS Bridge bidirecional.
@@ -129,14 +134,23 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                 },
               ),
 
-              // Barra Flutuante de Atalhos na Zona do Polegar
-              if (_controller.selectedElement == null && !_controller.isLoading && _controller.errorMessage == null)
-                _buildFloatingToolBar(),
+              // Botão Flutuante de Fácil Acesso com Ícone do Olho para Elementos Ocultados
+              if (_controller.hasHiddenElements && !_controller.isLoading && _controller.errorMessage == null)
+                _buildFloatingHiddenEyeButton(),
 
-              // Painel de Inspeção BIM Responsivo (Mobile: Card compacto / Tablet: Dock lateral)
-              if (_controller.selectedElement != null)
-                BimInspectorPanel(
+              // TabBar de Ações Rápidas Estilo Nubank (exibida ao clicar em um elemento 3D)
+              if (_controller.selectedElement != null && !_controller.isLoading)
+                NubankBimTabBar(
                   metadata: _controller.selectedElement!,
+                  isIsolated: _controller.isElementIsolated(_controller.selectedElement!.expressID),
+                  onViewBimData: () {
+                    BimMetadataBottomSheet.show(
+                      context: context,
+                      metadata: _controller.selectedElement!,
+                    );
+                  },
+                  onHideElement: () => _handleHideElement(_controller.selectedElement!),
+                  onIsolateElement: () => _handleIsolateElement(_controller.selectedElement!),
                   onClose: () => _controller.clearSelectedElement(),
                 ),
 
@@ -154,82 +168,122 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
     );
   }
 
-  /// Barra de ferramentas flutuante na parte inferior (ergonômica para uma mão no celular)
-  Widget _buildFloatingToolBar() {
+  /// Abre o Bottom Sheet dedicado para visualização e gerenciamento de elementos ocultados
+  void _openHiddenElementsSheet() {
+    HapticFeedback.lightImpact();
+    HiddenElementsBottomSheet.show(
+      context: context,
+      controller: _controller,
+    );
+  }
+
+  /// Oculta o elemento selecionado no motor 3D
+  void _handleHideElement(BimElementMetadata metadata) async {
+    await _controller.hideSelectedElement();
+  }
+
+  /// Isola o elemento selecionado ou restaura a visão completa
+  void _handleIsolateElement(BimElementMetadata metadata) async {
+    await _controller.isolateSelectedElement();
+  }
+
+  /// Botão Flutuante de Fácil Acesso com Ícone do Olho para visualização rápida dos elementos ocultados
+  Widget _buildFloatingHiddenEyeButton() {
+    final count = _controller.hiddenCount;
+    // Eleva a posição quando a NubankTabBar estiver aberta para não sobrepor
+    final bottomOffset = _controller.selectedElement != null ? 90.0 : 20.0;
+
     return Positioned(
-      bottom: 16,
-      left: 16,
+      bottom: bottomOffset,
       right: 16,
       child: SafeArea(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final isSmall = constraints.maxWidth < 360;
-            return Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                if (!isSmall)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: TweenAnimationBuilder<double>(
+          duration: const Duration(milliseconds: 260),
+          tween: Tween(begin: 0.0, end: 1.0),
+          curve: Curves.easeOutBack,
+          builder: (context, val, child) {
+            return Transform.scale(
+              scale: val,
+              child: Opacity(
+                opacity: val.clamp(0.0, 1.0),
+                child: child,
+              ),
+            );
+          },
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: _openHiddenElementsSheet,
+                  borderRadius: BorderRadius.circular(24),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.8),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                      color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(
+                        color: const Color(0xFFF59E0B).withValues(alpha: 0.70),
+                        width: 1.2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFF59E0B).withValues(alpha: 0.28),
+                          blurRadius: 16,
+                          offset: const Offset(0, 4),
+                        ),
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.40),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                    child: const Row(
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.touch_app_outlined, size: 13, color: AppColors.surface),
-                        SizedBox(width: 5),
-                        Text(
-                          'Toque para inspecionar',
+                        const Icon(
+                          Icons.visibility_off_rounded,
+                          color: Color(0xFFFBBF24),
+                          size: 19,
+                        ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          'Ocultados',
                           style: TextStyle(
                             fontFamily: AppTypography.fontFamily,
-                            fontSize: 11,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
                             color: AppColors.surface,
-                            fontWeight: FontWeight.w500,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF59E0B),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '$count',
+                            style: const TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF0F172A),
+                            ),
                           ),
                         ),
                       ],
                     ),
                   ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.18),
-                        blurRadius: 10,
-                        offset: const Offset(0, 3),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'Centralizar Câmera',
-                        icon: const Icon(Icons.center_focus_strong_rounded, color: AppColors.primary, size: 18),
-                        onPressed: _controller.isViewerReady ? () => _controller.resetCamera() : null,
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                        padding: EdgeInsets.zero,
-                      ),
-                      IconButton(
-                        tooltip: 'Recarregar',
-                        icon: const Icon(Icons.refresh_rounded, color: AppColors.textMuted, size: 18),
-                        onPressed: _controller.isViewerReady
-                            ? () => _controller.loadModelFile(widget.project.filePath, widget.project.format)
-                            : null,
-                        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                        padding: EdgeInsets.zero,
-                      ),
-                    ],
-                  ),
                 ),
-              ],
-            );
-          },
+              ),
+            ),
+          ),
         ),
       ),
     );

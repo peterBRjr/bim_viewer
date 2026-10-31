@@ -20,6 +20,15 @@ const state = {
   initialCameraPos: new THREE.Vector3(12, 12, 16),
   initialCameraTarget: new THREE.Vector3(0, 0, 0),
   pointerDownPos: { x: 0, y: 0 },
+  hiddenIds: new Set(),
+  isolatedElementId: null,
+  isolatedElementIds: new Set(),
+  childToParent: new Map(),
+  parentToChildren: new Map(),
+  originalIndices: null,
+  originalGroups: null,
+  ghostMaterial: null,
+  isPreviewingHidden: false,
 };
 
 /**
@@ -116,6 +125,18 @@ function initEngine() {
     opacity: 0.88,
   });
 
+  // 8.1 Material Fantasma Translúcido para Revelação de Elementos Ocultados (Amber/Orange #F59E0B)
+  state.ghostMaterial = new THREE.MeshStandardMaterial({
+    color: 0xF59E0B,
+    roughness: 0.4,
+    metalness: 0.1,
+    emissive: 0xD97706,
+    emissiveIntensity: 0.30,
+    transparent: true,
+    opacity: 0.45,
+    depthWrite: false,
+  });
+
   // 9. Inicialização da Engine de IFC (IFCLoader + web-ifc.wasm)
   initIfcEngine();
 
@@ -123,6 +144,9 @@ function initEngine() {
   window.addEventListener('resize', onWindowResize);
   state.renderer.domElement.addEventListener('pointerdown', onPointerDown);
   state.renderer.domElement.addEventListener('pointerup', onPointerUp);
+  state.renderer.domElement.addEventListener('pointercancel', () => {
+    state.pointerDownPos = null;
+  });
 
   // Loop de Animação
   animate();
@@ -179,18 +203,25 @@ function animate() {
  * Registro de início de clique/toque
  */
 function onPointerDown(event) {
-  state.pointerDownPos = { x: event.clientX, y: event.clientY };
+  state.pointerDownPos = { x: event.clientX, y: event.clientY, time: Date.now() };
 }
 
 /**
  * Processamento de seleção por Raycaster (apenas se for clique simples, não arrasto)
  */
 async function onPointerUp(event) {
+  if (!state.pointerDownPos) return;
+
   const deltaX = Math.abs(event.clientX - state.pointerDownPos.x);
   const deltaY = Math.abs(event.clientY - state.pointerDownPos.y);
+  const deltaTime = Date.now() - (state.pointerDownPos.time || 0);
+  const isTouch = event.pointerType === 'touch';
+  const maxDelta = isTouch ? 20 : 10;
 
-  // Ignora se o usuário estava rotacionando ou movendo a câmera
-  if (deltaX > 6 || deltaY > 6) return;
+  state.pointerDownPos = null;
+
+  // Se o usuário arrastou para rotacionar a câmera ou segurou por muito tempo, não processa seleção
+  if (deltaX > maxDelta || deltaY > maxDelta || deltaTime > 600) return;
 
   const rect = state.renderer.domElement.getBoundingClientRect();
   state.mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -206,9 +237,82 @@ async function onPointerUp(event) {
     const hit = intersects[0];
     await selectElement(hit);
   } else {
-    // Clique no fundo limpa a seleção
+    // Clique no fundo vazio: desseleciona o elemento e remove o destaque azul
     clearSelection();
   }
+}
+
+/**
+ * Constrói o grafo de hierarquia de agregação e decomposição (Padrão Revit / openBIM).
+ * Permite que peças de telhado (IfcSlab), escadas e fachadas selecionem o elemento pai (IfcRoof).
+ */
+async function buildHierarchyMaps(modelID) {
+  state.childToParent.clear();
+  state.parentToChildren.clear();
+
+  if (!state.ifcLoader || !state.ifcLoader.ifcManager) return;
+
+  const aggregateTypeCodes = [];
+  if (typeof WebIFC !== 'undefined') {
+    if (WebIFC.IFCRELAGGREGATES !== undefined) aggregateTypeCodes.push(WebIFC.IFCRELAGGREGATES);
+    if (WebIFC.IFCRELNESTS !== undefined) aggregateTypeCodes.push(WebIFC.IFCRELNESTS);
+  }
+  // Código padrão IFC2x3 / IFC4 para IFCRELAGGREGATES
+  if (!aggregateTypeCodes.includes(160246688)) aggregateTypeCodes.push(160246688);
+
+  const spatialTypes = new Set([
+    'IFCPROJECT',
+    'IFCSITE',
+    'IFCBUILDING',
+    'IFCBUILDINGSTOREY',
+    'IFCSPACE'
+  ]);
+
+  for (const typeCode of aggregateTypeCodes) {
+    try {
+      const rels = await state.ifcLoader.ifcManager.getAllItemsOfType(modelID, typeCode, true);
+      if (!Array.isArray(rels)) continue;
+
+      for (const rel of rels) {
+        const parentId = rel.RelatingObject?.value;
+        if (!parentId) continue;
+
+        let parentType = 'IfcBuildingElement';
+        try {
+          parentType = state.ifcLoader.ifcManager.getIfcType(modelID, parentId) || '';
+        } catch (e) {}
+
+        // Não agrupa por contêineres espaciais (Projeto, Terreno, Edifício, Pavimento)
+        if (spatialTypes.has(parentType.toUpperCase())) continue;
+
+        const rawChildren = rel.RelatedObjects || [];
+        const children = [];
+        for (const item of rawChildren) {
+          const cid = typeof item === 'object' && item !== null && item.value !== undefined ? item.value : item;
+          if (typeof cid === 'number' && !isNaN(cid)) {
+            children.push(cid);
+          }
+        }
+
+        if (children.length > 0) {
+          const aggInfo = {
+            parentId: parentId,
+            type: parentType || 'IfcElement',
+            children: children
+          };
+
+          state.parentToChildren.set(parentId, aggInfo);
+          for (const cid of children) {
+            state.childToParent.set(cid, aggInfo);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`Aviso ao ler relação agregada tipo ${typeCode}:`, err);
+    }
+  }
+
+  console.log(`[Hierarquia BIM] Mapeados ${state.parentToChildren.size} elementos compostos com agregações.`);
 }
 
 /**
@@ -225,30 +329,44 @@ async function selectElement(hit) {
     try {
       const expressID = state.ifcLoader.ifcManager.getExpressId(object.geometry, hit.faceIndex);
       if (expressID !== undefined && expressID !== null && expressID >= 0) {
-        // Aplica destaque no elemento IFC
+        // Verifica se o elemento clicado pertence a uma agregação pai (Padrão Revit: IfcRoof -> IfcSlab)
+        const aggregate = state.childToParent.get(expressID);
+        const targetID = aggregate ? aggregate.parentId : expressID;
+        const idsToHighlight = aggregate ? aggregate.children : [expressID];
+
+        // Aplica destaque em todas as geometrias do elemento composto
         state.ifcLoader.ifcManager.createSubset({
           modelID: object.modelID,
-          ids: [expressID],
+          ids: idsToHighlight,
           scene: state.scene,
           removePrevious: true,
           material: state.highlightMaterial
         });
 
-        state.selectedObject = { modelID: object.modelID, expressID: expressID, isIfc: true };
+        state.selectedObject = {
+          modelID: object.modelID,
+          expressID: targetID,
+          subIds: idsToHighlight,
+          isComposite: Boolean(aggregate),
+          isIfc: true
+        };
 
-        // Extrai propriedades reais do elemento no IFC
-        let name = `Elemento BIM #${expressID}`;
-        let category = 'IfcBuildingElement';
+        // Extrai propriedades reais do elemento alvo (Elemento Pai no caso de agregação)
+        let name = `Elemento BIM #${targetID}`;
+        let category = aggregate ? aggregate.type : 'IfcBuildingElement';
         const psetsFormatted = {};
 
         try {
-          const itemProps = await state.ifcLoader.ifcManager.getItemProperties(object.modelID, expressID);
+          const itemProps = await state.ifcLoader.ifcManager.getItemProperties(object.modelID, targetID);
           if (itemProps) {
             name = itemProps.Name?.value || itemProps.ObjectType?.value || name;
-            category = itemProps.__proto__?.constructor?.name || deduceBimCategory(object) || 'IfcBuildingElement';
+            try {
+              const fullType = state.ifcLoader.ifcManager.getIfcType(object.modelID, targetID);
+              if (fullType) category = fullType;
+            } catch (e) {}
 
             psetsFormatted["Propriedades Gerais"] = {
-              "ExpressID": expressID,
+              "ExpressID": targetID,
               "Nome": name,
               "Categoria IFC": category,
               "GlobalId": itemProps.GlobalId?.value || "N/A",
@@ -261,7 +379,7 @@ async function selectElement(hit) {
 
         // Extrai PropertySets reais (dimensões, materiais, fases do Revit)
         try {
-          const psets = await state.ifcLoader.ifcManager.getPropertySets(object.modelID, expressID, true);
+          const psets = await state.ifcLoader.ifcManager.getPropertySets(object.modelID, targetID, true);
           if (Array.isArray(psets)) {
             for (const pset of psets) {
               const psetName = pset.Name?.value || 'Outras Propriedades';
@@ -284,6 +402,15 @@ async function selectElement(hit) {
           console.warn('Erro ao extrair PropertySets:', e);
         }
 
+        // Se for um elemento composto com agregação, adiciona ficha de composição
+        if (aggregate) {
+          psetsFormatted["Composição do Elemento"] = {
+            "Estrutura": "Elemento Composto (Hierarquia Revit)",
+            "Total de Partes": `${aggregate.children.length} peças agregadas`,
+            "IDs dos Componentes": aggregate.children.join(", ")
+          };
+        }
+
         // Se o elemento não possuir Psets no IFC, cria estimativas úteis
         if (Object.keys(psetsFormatted).length <= 1) {
           psetsFormatted["Dados Técnicos"] = {
@@ -294,10 +421,12 @@ async function selectElement(hit) {
         }
 
         notifyFlutter('onElementSelected', {
-          expressID: expressID,
+          expressID: targetID,
           name: name,
           category: category,
-          psets: psetsFormatted
+          psets: psetsFormatted,
+          subIds: idsToHighlight,
+          isComposite: Boolean(aggregate)
         });
         return;
       }
@@ -335,21 +464,299 @@ async function selectElement(hit) {
 }
 
 /**
- * Remove o destaque e notifica deseleção
+ * Remove o destaque azul do elemento e notifica deseleção para o Flutter
  */
 function clearSelection() {
-  if (state.selectedObject) {
-    if (state.selectedObject.isIfc && state.ifcLoader) {
-      try {
-        state.ifcLoader.ifcManager.removeSubset(state.selectedObject.modelID, state.scene, state.highlightMaterial);
-      } catch (e) {}
-    } else if (state.selectedObject.material && state.originalMaterial) {
+  const modelID = state.selectedObject?.modelID !== undefined
+    ? state.selectedObject.modelID
+    : (state.currentModel?.modelID);
+
+  // 1. Remove o subset do IFCLoader (modelo IFC)
+  if (state.ifcLoader && modelID !== undefined && state.highlightMaterial) {
+    try {
+      state.ifcLoader.ifcManager.removeSubset(modelID, state.highlightMaterial);
+    } catch (e) {
+      console.warn('Erro em removeSubset:', e);
+    }
+    try {
+      state.ifcLoader.ifcManager.clearSubset(modelID, 'DEFAULT', state.highlightMaterial);
+    } catch (e) {}
+  }
+
+  // 2. Restaura o material original para malhas Three.js / GLTF
+  if (state.selectedObject && !state.selectedObject.isIfc) {
+    if (state.selectedObject.material && state.originalMaterial) {
       state.selectedObject.material = state.originalMaterial;
     }
   }
+
+  // Restaura qualquer malha que tenha userData.originalMaterial
+  if (state.currentModel) {
+    state.currentModel.traverse((child) => {
+      if (child.isMesh && child.userData.originalMaterial) {
+        child.material = child.userData.originalMaterial;
+        delete child.userData.originalMaterial;
+      }
+    });
+  }
+
+  // 3. Limpeza defensiva total da cena: garante que NENHUMA malha azul permaneça visível
+  if (state.scene && state.highlightMaterial) {
+    const toRemove = [];
+    state.scene.traverse((child) => {
+      if (child.isMesh && (
+        child.material === state.highlightMaterial ||
+        child.material?.uuid === state.highlightMaterial.uuid
+      )) {
+        toRemove.push(child);
+      }
+    });
+
+    for (const mesh of toRemove) {
+      if (mesh.parent) {
+        mesh.parent.remove(mesh);
+      } else {
+        state.scene.remove(mesh);
+      }
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
+      }
+    }
+  }
+
   state.selectedObject = null;
   state.originalMaterial = null;
+  notifyFlutter('onElementDeselected');
 }
+
+/**
+ * Reavalia a visibilidade dos elementos na cena 3D (Ocultação e Isolamento).
+ * Suporta tanto malhas Three.js / GLTF quanto modelos IFC via BufferGeometry indexada.
+ */
+function updateModelVisibility() {
+  if (!state.currentModel) return;
+
+  // 1. Caso modelo IFC (BufferGeometry consolidada via web-ifc)
+  if (state.ifcLoader && state.currentModel.modelID !== undefined && state.originalIndices) {
+    const geom = state.currentModel.geometry;
+    if (geom && geom.attributes.expressID) {
+      const orig = state.originalIndices;
+      const expArray = geom.attributes.expressID.array;
+      const newIndices = [];
+      const newGroups = [];
+      let currentStart = 0;
+
+      const groups = state.originalGroups && state.originalGroups.length > 0
+        ? state.originalGroups
+        : [{ start: 0, count: orig.length, materialIndex: 0 }];
+
+      for (let g = 0; g < groups.length; g++) {
+        const origGroup = groups[g];
+        const groupStart = origGroup.start;
+        const groupCount = origGroup.count;
+        let addedCount = 0;
+
+        for (let i = groupStart; i < groupStart + groupCount; i += 3) {
+          const a = orig[i];
+          const b = orig[i + 1];
+          const c = orig[i + 2];
+          const id = expArray[a];
+
+          if (state.isolatedElementIds && state.isolatedElementIds.size > 0) {
+            if (state.isolatedElementIds.has(id)) {
+              newIndices.push(a, b, c);
+              addedCount += 3;
+            }
+          } else if (state.isolatedElementId !== null) {
+            if (id === state.isolatedElementId) {
+              newIndices.push(a, b, c);
+              addedCount += 3;
+            }
+          } else if (!state.hiddenIds.has(id)) {
+            newIndices.push(a, b, c);
+            addedCount += 3;
+          }
+        }
+
+        newGroups.push({
+          start: currentStart,
+          count: addedCount,
+          materialIndex: origGroup.materialIndex !== undefined ? origGroup.materialIndex : 0,
+        });
+        currentStart += addedCount;
+      }
+
+      geom.setIndex(newIndices);
+      if (state.originalGroups && state.originalGroups.length > 0) {
+        geom.groups = newGroups;
+      }
+      if (geom.index) {
+        geom.index.needsUpdate = true;
+      }
+    }
+  }
+  // 2. Caso modelo GLTF / Malhas avulsas
+  else {
+    state.currentModel.traverse((child) => {
+      if (child.isMesh) {
+        const id = child.userData.expressID || child.id;
+        if (state.isolatedElementIds && state.isolatedElementIds.size > 0) {
+          child.visible = state.isolatedElementIds.has(id);
+        } else if (state.isolatedElementId !== null) {
+          child.visible = (id === state.isolatedElementId);
+        } else {
+          child.visible = !state.hiddenIds.has(id);
+        }
+      }
+    });
+  }
+
+  // Atualiza o subset fantasma para pré-visualização de elementos ocultados se o modo estiver ativo
+  updateGhostSubset();
+
+  notifyFlutter('onVisibilityChanged', {
+    hiddenCount: state.hiddenIds.size,
+    isIsolated: (state.isolatedElementIds && state.isolatedElementIds.size > 0) || state.isolatedElementId !== null,
+    isolatedId: state.isolatedElementId,
+  });
+}
+
+/**
+ * Atualiza o subset fantasma (ghost mesh) translúcido para preview dos elementos ocultos no 3D
+ */
+function updateGhostSubset() {
+  const modelID = state.currentModel?.modelID;
+
+  // 1. Caso modelo IFC (web-ifc)
+  if (state.ifcLoader && modelID !== undefined && state.ghostMaterial) {
+    try {
+      state.ifcLoader.ifcManager.removeSubset(modelID, state.ghostMaterial);
+    } catch (e) {}
+
+    if (state.isPreviewingHidden && state.hiddenIds.size > 0 && state.isolatedElementId === null) {
+      try {
+        state.ifcLoader.ifcManager.createSubset({
+          modelID: modelID,
+          ids: Array.from(state.hiddenIds),
+          scene: state.scene,
+          removePrevious: true,
+          material: state.ghostMaterial,
+        });
+      } catch (err) {
+        console.warn('Falha ao renderizar pré-visualização fantasma de elementos ocultados:', err);
+      }
+    }
+  }
+  // 2. Caso modelo GLTF / Malhas avulsas Three.js
+  else if (state.currentModel && !state.ifcLoader && state.ghostMaterial) {
+    state.currentModel.traverse((child) => {
+      if (child.isMesh) {
+        const id = child.userData.expressID || child.id;
+        if (state.hiddenIds.has(id)) {
+          if (state.isPreviewingHidden && state.isolatedElementId === null) {
+            child.visible = true;
+            if (!child.userData.savedMaterial) {
+              child.userData.savedMaterial = child.material;
+            }
+            child.material = state.ghostMaterial;
+          } else {
+            child.visible = false;
+            if (child.userData.savedMaterial) {
+              child.material = child.userData.savedMaterial;
+              delete child.userData.savedMaterial;
+            }
+          }
+        }
+      }
+    });
+  }
+}
+
+/**
+ * Funções Globais expostas para a JS Bridge do Flutter
+ */
+window.clearSelection = clearSelection;
+
+window.hideElement = function(expressID) {
+  const id = Number(expressID);
+  if (isNaN(id)) return;
+
+  if (state.selectedObject) {
+    clearSelection();
+  }
+
+  // Se o elemento possui partes na hierarquia de agregação, oculta todas as suas partes físicas
+  const agg = state.parentToChildren.get(id) || state.childToParent.get(id);
+  const idsToHide = agg ? agg.children : [id];
+
+  for (const hideId of idsToHide) {
+    state.hiddenIds.add(hideId);
+    if (state.isolatedElementIds) {
+      state.isolatedElementIds.delete(hideId);
+    }
+  }
+
+  if (state.isolatedElementId !== null && (state.isolatedElementId === id || idsToHide.includes(state.isolatedElementId))) {
+    state.isolatedElementId = null;
+    if (state.isolatedElementIds) {
+      state.isolatedElementIds.clear();
+    }
+  }
+
+  updateModelVisibility();
+};
+
+window.showElement = function(expressID) {
+  const id = Number(expressID);
+  if (isNaN(id)) return;
+
+  const agg = state.parentToChildren.get(id) || state.childToParent.get(id);
+  const idsToShow = agg ? agg.children : [id];
+
+  for (const showId of idsToShow) {
+    state.hiddenIds.delete(showId);
+  }
+
+  updateModelVisibility();
+};
+
+window.isolateElement = function(expressID) {
+  const id = Number(expressID);
+  if (isNaN(id)) return;
+
+  const agg = state.parentToChildren.get(id) || state.childToParent.get(id);
+  const targetIds = agg ? agg.children : [id];
+
+  const isAlreadyIsolated = state.isolatedElementId === id ||
+    (state.isolatedElementIds && state.isolatedElementIds.size > 0 && targetIds.every(tid => state.isolatedElementIds.has(tid)));
+
+  if (isAlreadyIsolated) {
+    state.isolatedElementId = null;
+    if (state.isolatedElementIds) {
+      state.isolatedElementIds.clear();
+    }
+  } else {
+    state.isolatedElementId = id;
+    state.isolatedElementIds = new Set(targetIds);
+  }
+
+  updateModelVisibility();
+};
+
+window.restoreAllVisibility = function() {
+  state.hiddenIds.clear();
+  state.isolatedElementId = null;
+  if (state.isolatedElementIds) {
+    state.isolatedElementIds.clear();
+  }
+  state.isPreviewingHidden = false;
+  updateModelVisibility();
+};
+
+window.previewHiddenElements = function(enable) {
+  state.isPreviewingHidden = Boolean(enable);
+  updateGhostSubset();
+};
 
 /**
  * Deduz categoria BIM com base no nome da malha
@@ -441,6 +848,11 @@ window.loadBimModel = function(base64Data, format) {
       state.currentModel = null;
     }
 
+    state.hiddenIds.clear();
+    state.isolatedElementId = null;
+    state.originalIndices = null;
+    state.originalGroups = null;
+
     if (cleanFormat === 'GLB' || cleanFormat === 'GLTF') {
       loadGltfModel(arrayBuffer);
     } else if (cleanFormat === 'IFC') {
@@ -482,6 +894,8 @@ function loadGltfModel(arrayBuffer) {
 
       state.currentModel = model;
       state.scene.add(model);
+      state.hiddenIds.clear();
+      state.isolatedElementId = null;
 
       fitModelToFrame(model);
 
@@ -538,6 +952,24 @@ async function loadIfcModel(arrayBuffer) {
     // Adiciona o modelo geométrico consolidado na cena
     state.currentModel = ifcModel;
     state.scene.add(ifcModel);
+
+    // Salva cópia fiel dos índices e grupos originais para permitir ocultar/isolar com alta fidelidade
+    if (ifcModel.geometry && ifcModel.geometry.index) {
+      state.originalIndices = Array.from(ifcModel.geometry.index.array);
+      state.originalGroups = JSON.parse(JSON.stringify(ifcModel.geometry.groups || []));
+    }
+    state.hiddenIds.clear();
+    state.isolatedElementId = null;
+    if (state.isolatedElementIds) {
+      state.isolatedElementIds.clear();
+    }
+
+    // Mapeia hierarquia de agregados nativos do Revit (IfcRoof -> IfcSlab, IfcCurtainWall, etc.)
+    try {
+      await buildHierarchyMaps(ifcModel.modelID);
+    } catch (e) {
+      console.warn('Erro ao construir mapa de hierarquia agregada:', e);
+    }
 
     // Enquadra a câmera técnica perfeitamente na casinha/edificação
     fitModelToFrame(ifcModel);
