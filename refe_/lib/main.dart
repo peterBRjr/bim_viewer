@@ -13,10 +13,7 @@ Future<void> main() async {
 class BimViewerApp extends StatelessWidget {
   final HomeController? homeController;
 
-  const BimViewerApp({
-    super.key,
-    this.homeController,
-  });
+  const BimViewerApp({super.key, this.homeController});
 
   @override
   Widget build(BuildContext context) {

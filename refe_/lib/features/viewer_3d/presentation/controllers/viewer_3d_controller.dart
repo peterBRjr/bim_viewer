@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../../../../core/services/localhost_server_service.dart';
+import '../../domain/models/measurement_model.dart';
+
 /// Metadados de um elemento BIM selecionado via Raycaster na Viewport 3D.
 class BimElementMetadata {
   final int expressID;
@@ -191,6 +194,20 @@ class Viewer3DController extends ChangeNotifier {
   bool _isGhostPreviewActive = false;
   int? _isolatedElementId;
 
+  // Estado do Modo de Medição de Vãos Livres 3D
+  bool _isMeasureMode = false;
+  String _measureSubMode = 'span'; // 'span' (vão livre 1 toque) ou 'point_to_point' (2 toques)
+  final List<MeasurementModel> _measurements = [];
+  MeasurementModel? _lastMeasurement;
+  bool _isWaitingSecondPoint = false;
+  String? _measureStatusMessage;
+
+  // Estado de Navegação Técnica e Plano de Corte (Padrão Autodesk Fusion / BIM 360)
+  bool _isSectionCutActive = false;
+  double _sectionCutRatio = 0.75;
+  String _currentCameraView = 'iso';
+  bool _renderProcessCrashed = false;
+
   String? _pendingFilePath;
   String? _pendingFormat;
 
@@ -219,6 +236,22 @@ class Viewer3DController extends ChangeNotifier {
   int get hiddenCount => _hiddenElementIds.length;
   bool isHidden(int expressID) => _hiddenElementIds.contains(expressID);
   bool isElementIsolated(int expressID) => _isolatedElementId == expressID;
+
+  // Getters do Modo de Medição
+  bool get isMeasureMode => _isMeasureMode;
+  String get measureSubMode => _measureSubMode;
+  List<MeasurementModel> get measurements => List.unmodifiable(_measurements);
+  MeasurementModel? get lastMeasurement => _lastMeasurement;
+  bool get hasMeasurements => _measurements.isNotEmpty;
+  int get measurementCount => _measurements.length;
+  bool get isWaitingSecondPoint => _isWaitingSecondPoint;
+  String? get measureStatusMessage => _measureStatusMessage;
+
+  // Getters de Navegação Técnica e Resiliência (BIM 360 / Fusion)
+  bool get isSectionCutActive => _isSectionCutActive;
+  double get sectionCutRatio => _sectionCutRatio;
+  String get currentCameraView => _currentCameraView;
+  bool get renderProcessCrashed => _renderProcessCrashed;
 
   /// Registra o InAppWebViewController e configura a JS Bridge bidirecional.
   void setWebViewController(InAppWebViewController controller) {
@@ -309,9 +342,80 @@ class Viewer3DController extends ChangeNotifier {
         }
       },
     );
+
+    // 7. Notificações do Modo de Medição de Vãos e Distâncias 3D
+    controller.addJavaScriptHandler(
+      handlerName: 'onMeasureModeChanged',
+      callback: (args) {
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          _isMeasureMode = data['enabled'] == true;
+          _measureSubMode = data['mode']?.toString() ?? 'span';
+          if (!_isMeasureMode) {
+            _isWaitingSecondPoint = false;
+            _measureStatusMessage = null;
+          }
+          notifyListeners();
+        }
+      },
+    );
+
+    controller.addJavaScriptHandler(
+      handlerName: 'onMeasurementCreated',
+      callback: (args) {
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          final measurement = MeasurementModel.fromMap(data);
+          _measurements.add(measurement);
+          _lastMeasurement = measurement;
+          _isWaitingSecondPoint = false;
+          _measureStatusMessage = measurement.isSpan
+              ? 'Vão livre detectado: ${measurement.formattedDistance}'
+              : 'Distância medida: ${measurement.formattedDistance}';
+          notifyListeners();
+        }
+      },
+    );
+
+    controller.addJavaScriptHandler(
+      handlerName: 'onMeasurementWaitingPoint',
+      callback: (args) {
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          final cancelled = data['cancelled'] == true;
+          _isWaitingSecondPoint = !cancelled;
+          _measureStatusMessage = cancelled ? null : data['message']?.toString();
+          notifyListeners();
+        }
+      },
+    );
+
+    controller.addJavaScriptHandler(
+      handlerName: 'onMeasurementRemoved',
+      callback: (args) {
+        if (_measurements.isNotEmpty) {
+          _measurements.removeLast();
+          _lastMeasurement = _measurements.isNotEmpty ? _measurements.last : null;
+          _isWaitingSecondPoint = false;
+          _measureStatusMessage = null;
+          notifyListeners();
+        }
+      },
+    );
+
+    controller.addJavaScriptHandler(
+      handlerName: 'onMeasurementCleared',
+      callback: (args) {
+        _measurements.clear();
+        _lastMeasurement = null;
+        _isWaitingSecondPoint = false;
+        _measureStatusMessage = null;
+        notifyListeners();
+      },
+    );
   }
 
-  /// Lê o arquivo local como bytes, converte para Base64 e injeta no motor WebGL via JS.
+  /// Realiza streaming HTTP local (ou leitura direta) e injeta o modelo BIM no motor WebGL via JS.
   Future<void> loadModelFile(String filePath, String format) async {
     _isLoading = true;
     _loadingProgress = 5.0;
@@ -321,6 +425,15 @@ class Viewer3DController extends ChangeNotifier {
     _hiddenElementsMap.clear();
     _isolatedElementId = null;
     _isGhostPreviewActive = false;
+    _isMeasureMode = false;
+    _measurements.clear();
+    _lastMeasurement = null;
+    _isWaitingSecondPoint = false;
+    _measureStatusMessage = null;
+    _isSectionCutActive = false;
+    _sectionCutRatio = 0.75;
+    _currentCameraView = 'iso';
+    _renderProcessCrashed = false;
     notifyListeners();
 
     if (!_isViewerReady || _webViewController == null) {
@@ -331,24 +444,44 @@ class Viewer3DController extends ChangeNotifier {
     }
 
     try {
+      final cleanFormat = format.toUpperCase();
+      final isRemoteUrl = filePath.startsWith('http://') || filePath.startsWith('https://');
+
+      if (isRemoteUrl) {
+        _loadingProgress = 12.0;
+        notifyListeners();
+        await _webViewController?.evaluateJavascript(
+          source: 'window.loadBimModelFromUrl(${jsonEncode(filePath)}, ${jsonEncode(cleanFormat)});',
+        );
+        return;
+      }
+
       final file = File(filePath);
       if (!await file.exists()) {
         throw FileSystemException('Arquivo do modelo BIM não encontrado no disco local', filePath);
       }
 
-      _loadingProgress = 15.0;
+      _loadingProgress = 10.0;
       notifyListeners();
 
-      // Leitura binária protegida
+      // Prioriza streaming HTTP local 100% offline para evitar estouro de memória/IPC em modelos grandes (ex: 90+ MB)
+      final streamUrl = await LocalhostServerService.registerModelFile(filePath);
+      if (streamUrl != null) {
+        await _webViewController?.evaluateJavascript(
+          source: 'window.loadBimModelFromUrl(${jsonEncode(streamUrl)}, ${jsonEncode(cleanFormat)});',
+        );
+        return;
+      }
+
+      // Fallback em Base64 apenas caso o servidor de streaming local não esteja disponível
       final Uint8List bytes = await file.readAsBytes();
       final String base64Data = base64Encode(bytes);
 
       _loadingProgress = 35.0;
       notifyListeners();
 
-      // Executa o carregamento no JavaScript da Viewport
       await _webViewController?.evaluateJavascript(
-        source: 'window.loadBimModel("$base64Data", "${format.toUpperCase()}");',
+        source: 'window.loadBimModel("$base64Data", "$cleanFormat");',
       );
     } catch (e, stack) {
       developer.log('Falha ao carregar modelo no visualizador 3D', error: e, stackTrace: stack, name: 'Viewer3DController');
@@ -360,9 +493,68 @@ class Viewer3DController extends ChangeNotifier {
 
   /// Dispara o comando para restaurar o ponto de vista da câmera no JS.
   Future<void> resetCamera() async {
+    _currentCameraView = 'iso';
+    notifyListeners();
     if (_webViewController != null) {
       await _webViewController?.evaluateJavascript(source: 'window.resetCamera();');
     }
+  }
+
+  /// Altera o ângulo da câmera para vistas técnicas predefinidas estilo ViewCube ('iso', 'top', 'front', 'right', 'left', 'back').
+  Future<void> setCameraView(String view) async {
+    _currentCameraView = view.toLowerCase();
+    notifyListeners();
+    if (_webViewController != null) {
+      await _webViewController?.evaluateJavascript(
+        source: 'window.setCameraView(${jsonEncode(_currentCameraView)});',
+      );
+    }
+  }
+
+  /// Alterna o Plano de Corte Horizontal (Section Cut estilo BIM 360 / Fusion).
+  Future<void> toggleSectionCut() async {
+    _isSectionCutActive = !_isSectionCutActive;
+    notifyListeners();
+    await _webViewController?.evaluateJavascript(
+      source: 'window.setSectionCut($_isSectionCutActive, $_sectionCutRatio);',
+    );
+  }
+
+  /// Atualiza a altura percentual (0.05 a 1.0) do Plano de Corte Horizontal em tempo real.
+  Future<void> setSectionCutRatio(double ratio) async {
+    _sectionCutRatio = ratio.clamp(0.05, 1.0);
+    if (!_isSectionCutActive) {
+      _isSectionCutActive = true;
+    }
+    notifyListeners();
+    await _webViewController?.evaluateJavascript(
+      source: 'window.setSectionCut(true, $_sectionCutRatio);',
+    );
+  }
+
+  /// Intercepta quedas do processo de renderização da WebView (ex: OOM do Android) evitando que o app feche.
+  void handleRenderProcessGone(bool didCrash) {
+    developer.log(
+      'Processo de renderização WebView encerrado pelo sistema (didCrash: $didCrash)',
+      name: 'Viewer3DController',
+    );
+    _isViewerReady = false;
+    _isLoading = false;
+    _renderProcessCrashed = true;
+    _errorMessage = 'O motor gráfico 3D precisou liberar memória do dispositivo. Toque em "Tentar novamente" para recarregar o modelo com segurança.';
+    notifyListeners();
+  }
+
+  /// Prepara o controller para recriação limpa da WebView após recuperação de processo.
+  void prepareWebViewRecovery(String filePath, String format) {
+    _renderProcessCrashed = false;
+    _errorMessage = null;
+    _isViewerReady = false;
+    _isLoading = true;
+    _loadingProgress = 5.0;
+    _pendingFilePath = filePath;
+    _pendingFormat = format;
+    notifyListeners();
   }
 
   /// Oculta o elemento atualmente selecionado no motor 3D e retorna seus metadados.
@@ -444,6 +636,69 @@ class Viewer3DController extends ChangeNotifier {
 
     await _webViewController?.evaluateJavascript(
       source: 'window.clearSelection();',
+    );
+  }
+
+  /// Alterna entre ativar e desativar o Modo de Medição de Vãos Livres
+  Future<void> toggleMeasureMode() async {
+    final nextState = !_isMeasureMode;
+    await setMeasureMode(nextState, mode: _measureSubMode);
+  }
+
+  /// Ativa ou desativa o Modo de Medição de Vãos Livres (spans) e distâncias
+  Future<void> setMeasureMode(bool enabled, {String mode = 'span'}) async {
+    _isMeasureMode = enabled;
+    _measureSubMode = mode;
+    _isWaitingSecondPoint = false;
+    if (enabled) {
+      _selectedElement = null;
+    }
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.setMeasureMode($enabled, "$mode");',
+    );
+  }
+
+  /// Alterna o submodo de medição ('span' = vão livre 1 toque, 'point_to_point' = 2 toques)
+  Future<void> setMeasureSubMode(String mode) async {
+    _measureSubMode = mode;
+    _isWaitingSecondPoint = false;
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.setMeasureSubMode("$mode");',
+    );
+  }
+
+  /// Limpa todas as medições e cotas ativas na cena 3D
+  Future<void> clearMeasurements() async {
+    _measurements.clear();
+    _lastMeasurement = null;
+    _isWaitingSecondPoint = false;
+    _measureStatusMessage = null;
+    _isSectionCutActive = false;
+    _sectionCutRatio = 0.75;
+    _currentCameraView = 'iso';
+    _renderProcessCrashed = false;
+    notifyListeners();
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.clearMeasurements();',
+    );
+  }
+
+  /// Remove a última medição realizada (ação de desfazer)
+  Future<void> removeLastMeasurement() async {
+    if (_measurements.isNotEmpty) {
+      _measurements.removeLast();
+      _lastMeasurement = _measurements.isNotEmpty ? _measurements.last : null;
+      _isWaitingSecondPoint = false;
+      notifyListeners();
+    }
+
+    await _webViewController?.evaluateJavascript(
+      source: 'window.removeLastMeasurement();',
     );
   }
 }

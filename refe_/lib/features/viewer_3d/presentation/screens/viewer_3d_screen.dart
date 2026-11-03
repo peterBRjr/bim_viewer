@@ -13,6 +13,7 @@ import '../controllers/viewer_3d_controller.dart';
 import '../widgets/bim_metadata_bottom_sheet.dart';
 import '../widgets/hidden_elements_bottom_sheet.dart';
 import '../widgets/bim_tabbar.dart';
+import '../widgets/measure_mode_overlay.dart';
 
 /// Tela do Visualizador 3D baseada em ThatOpen Engine (@thatopen/components / Three.js).
 /// Executa a Viewport WebGL em InAppWebView com JS Bridge bidirecional.
@@ -32,6 +33,7 @@ class Viewer3dScreen extends StatefulWidget {
 
 class _Viewer3dScreenState extends State<Viewer3dScreen> {
   late final Viewer3DController _controller;
+  int _webViewRecreationId = 0;
 
   @override
   void initState() {
@@ -83,6 +85,131 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
               ],
             ),
             actions: [
+              // Botão de Ativação do Modo de Medição de Vãos Livres
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: _controller.isMeasureMode
+                      ? AppColors.accent
+                      : Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _controller.isMeasureMode
+                        ? AppColors.surface
+                        : Colors.white.withValues(alpha: 0.20),
+                    width: 1.2,
+                  ),
+                ),
+                child: IconButton(
+                  tooltip: _controller.isMeasureMode ? 'Sair da Medição' : 'Modo de Medição (Vãos)',
+                  icon: const Icon(
+                    Icons.straighten_rounded,
+                    color: AppColors.surface,
+                    size: 20,
+                  ),
+                  onPressed: _controller.isViewerReady
+                      ? () {
+                          HapticFeedback.mediumImpact();
+                          _controller.toggleMeasureMode();
+                        }
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 4),
+              // Botão de Plano de Corte Horizontal (Section Cut estilo BIM 360 / Fusion)
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: _controller.isSectionCutActive
+                      ? AppColors.accent
+                      : Colors.white.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _controller.isSectionCutActive
+                        ? AppColors.surface
+                        : Colors.white.withValues(alpha: 0.20),
+                    width: 1.2,
+                  ),
+                ),
+                child: IconButton(
+                  tooltip: _controller.isSectionCutActive ? 'Desativar Corte' : 'Plano de Corte ( Pavimentos )',
+                  icon: const Icon(
+                    Icons.content_cut_rounded,
+                    color: AppColors.surface,
+                    size: 19,
+                  ),
+                  onPressed: _controller.isViewerReady
+                      ? () {
+                          HapticFeedback.mediumImpact();
+                          _controller.toggleSectionCut();
+                        }
+                      : null,
+                ),
+              ),
+              // Menu de Vistas Técnicas Predefinidas (ViewCube Autodesk Fusion / BIM 360)
+              PopupMenuButton<String>(
+                tooltip: 'Vistas Técnicas (ViewCube)',
+                enabled: _controller.isViewerReady,
+                icon: const Icon(Icons.view_in_ar_rounded, color: AppColors.surface),
+                color: AppColors.surface,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onSelected: (view) {
+                  HapticFeedback.selectionClick();
+                  _controller.setCameraView(view);
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'iso',
+                    child: Row(
+                      children: [
+                        Icon(Icons.threed_rotation_rounded, size: 18, color: AppColors.accent),
+                        SizedBox(width: 10),
+                        Text('Vista Isométrica (3D Home)'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'top',
+                    child: Row(
+                      children: [
+                        Icon(Icons.grid_on_rounded, size: 18, color: AppColors.primary),
+                        SizedBox(width: 10),
+                        Text('Planta / Topo (Superior)'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'front',
+                    child: Row(
+                      children: [
+                        Icon(Icons.crop_landscape_rounded, size: 18, color: AppColors.primary),
+                        SizedBox(width: 10),
+                        Text('Elevação Frontal'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'right',
+                    child: Row(
+                      children: [
+                        Icon(Icons.view_sidebar_rounded, size: 18, color: AppColors.primary),
+                        SizedBox(width: 10),
+                        Text('Elevação Lateral Direita'),
+                      ],
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: 'left',
+                    child: Row(
+                      children: [
+                        Icon(Icons.view_sidebar_outlined, size: 18, color: AppColors.primary),
+                        SizedBox(width: 10),
+                        Text('Elevação Lateral Esquerda'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
               IconButton(
                 tooltip: 'Resetar Câmera',
                 icon: const Icon(Icons.center_focus_strong_rounded, color: AppColors.surface),
@@ -100,8 +227,9 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
           ),
           body: Stack(
             children: [
-              // Viewport WebGL via InAppWebView
+              // Viewport WebGL via InAppWebView com proteção contra queda do processo (onRenderProcessGone)
               InAppWebView(
+                key: ValueKey('bim_webview_$_webViewRecreationId'),
                 initialUrlRequest: URLRequest(
                   url: WebUri('http://localhost:8080/index.html'),
                 ),
@@ -125,6 +253,14 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                 onReceivedError: (controller, request, error) {
                   debugPrint('[WebView Error] ${request.url} - ${error.description}');
                 },
+                onWebContentProcessDidTerminate: (controller) async {
+                  debugPrint('[WebView iOS onWebContentProcessDidTerminate] OOM WebKit recovery triggered');
+                  _controller.handleRenderProcessGone(true);
+                },
+                onRenderProcessGone: (controller, detail) async {
+                  debugPrint('[WebView RenderProcessGone] didCrash: ${detail.didCrash}');
+                  _controller.handleRenderProcessGone(detail.didCrash);
+                },
                 onLoadStop: (webViewController, url) {
                   // Injeta o arquivo do modelo assim que o index.html terminar o carregamento
                   _controller.loadModelFile(
@@ -134,12 +270,16 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                 },
               ),
 
+              // Controle Deslizante de Plano de Corte Horizontal (Section Cut estilo BIM 360)
+              if (_controller.isSectionCutActive && !_controller.isLoading && _controller.errorMessage == null)
+                _buildSectionCutOverlay(),
+
               // Botão Flutuante de Fácil Acesso com Ícone do Olho para Elementos Ocultados
-              if (_controller.hasHiddenElements && !_controller.isLoading && _controller.errorMessage == null)
+              if (_controller.hasHiddenElements && !_controller.isLoading && _controller.errorMessage == null && !_controller.isMeasureMode)
                 _buildFloatingHiddenEyeButton(),
 
-              // TabBar de Ações Rápidas Estilo Nubank (exibida ao clicar em um elemento 3D)
-              if (_controller.selectedElement != null && !_controller.isLoading)
+              // TabBar de Ações Rápidas Estilo Nubank (exibida ao clicar em um elemento 3D fora do modo de medição)
+              if (_controller.selectedElement != null && !_controller.isLoading && !_controller.isMeasureMode)
                 NubankBimTabBar(
                   metadata: _controller.selectedElement!,
                   isIsolated: _controller.isElementIsolated(_controller.selectedElement!.expressID),
@@ -152,6 +292,13 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                   onHideElement: () => _handleHideElement(_controller.selectedElement!),
                   onIsolateElement: () => _handleIsolateElement(_controller.selectedElement!),
                   onClose: () => _controller.clearSelectedElement(),
+                ),
+
+              // Overlay do Modo de Medição de Vãos Livres (1 toque / ponto a ponto)
+              if (_controller.isMeasureMode && !_controller.isLoading)
+                MeasureModeOverlay(
+                  controller: _controller,
+                  onClose: () => _controller.setMeasureMode(false),
                 ),
 
               // Overlay de Carregamento e Progresso
@@ -408,10 +555,20 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                   const SizedBox(height: 8),
                   TextButton(
                     onPressed: () {
-                      _controller.loadModelFile(
-                        widget.project.filePath,
-                        widget.project.format,
-                      );
+                      if (_controller.renderProcessCrashed) {
+                        setState(() {
+                          _webViewRecreationId++;
+                        });
+                        _controller.prepareWebViewRecovery(
+                          widget.project.filePath,
+                          widget.project.format,
+                        );
+                      } else {
+                        _controller.loadModelFile(
+                          widget.project.filePath,
+                          widget.project.format,
+                        );
+                      }
                     },
                     style: TextButton.styleFrom(
                       foregroundColor: AppColors.accent,
@@ -423,6 +580,73 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// Barra flutuante de Plano de Corte Horizontal (Section Analysis estilo Autodesk BIM 360 / Fusion)
+  Widget _buildSectionCutOverlay() {
+    final pct = (_controller.sectionCutRatio * 100).round();
+    return Positioned(
+      top: 12,
+      left: 16,
+      right: 16,
+      child: SafeArea(
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.88),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: AppColors.accent.withValues(alpha: 0.65),
+                  width: 1.2,
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.content_cut_rounded, color: AppColors.accent, size: 18),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Corte: $pct%',
+                    style: const TextStyle(
+                      fontFamily: AppTypography.fontFamily,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.surface,
+                    ),
+                  ),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        activeTrackColor: AppColors.accent,
+                        inactiveTrackColor: Colors.white.withValues(alpha: 0.24),
+                        thumbColor: AppColors.surface,
+                        overlayColor: AppColors.accent.withValues(alpha: 0.2),
+                        trackHeight: 4,
+                      ),
+                      child: Slider(
+                        value: _controller.sectionCutRatio.clamp(0.05, 1.0),
+                        min: 0.05,
+                        max: 1.0,
+                        onChanged: (val) => _controller.setSectionCutRatio(val),
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Fechar Corte',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close_rounded, color: AppColors.surface, size: 18),
+                    onPressed: () => _controller.toggleSectionCut(),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );

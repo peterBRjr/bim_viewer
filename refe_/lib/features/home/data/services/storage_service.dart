@@ -73,13 +73,38 @@ class StorageService {
         projects.removeWhere((p) => p.name.contains('Projeto1'));
       }
 
-      // Semeia ajustado.ifc dos assets caso não esteja no catálogo
+      // Semeia modelos padrão dos assets caso não estejam no catálogo (ou caso o arquivo físico tenha sido removido)
       bool catalogUpdated = hadOldProjects;
-      if (!projects.any((p) => p.name.contains('ajustado'))) {
-        final seeded = await _seedProjectFromAsset('assets/models/ajustado.ifc', 'ajustado.ifc');
-        if (seeded != null) {
-          projects = [seeded, ...projects];
-          catalogUpdated = true;
+      const defaultAssets = <Map<String, String>>[
+        {'assetPath': 'assets/models/ajustado.ifc', 'name': 'ajustado.ifc', 'key': 'ajustado'},
+        {'assetPath': 'assets/models/randon.ifc', 'name': 'randon.ifc', 'key': 'randon'},
+      ];
+
+      for (final assetInfo in defaultAssets) {
+        final key = assetInfo['key']!;
+        final assetPath = assetInfo['assetPath']!;
+        final originalName = assetInfo['name']!;
+
+        final existingIndex = projects.indexWhere((proj) => proj.name.toLowerCase().contains(key));
+        if (existingIndex == -1) {
+          final seeded = await _seedProjectFromAsset(assetPath, originalName);
+          if (seeded != null) {
+            projects = [seeded, ...projects];
+            catalogUpdated = true;
+          }
+        } else {
+          final existing = projects[existingIndex];
+          if (existing.filePath.isEmpty || !await File(existing.filePath).exists()) {
+            final reseeded = await _seedProjectFromAsset(
+              assetPath,
+              originalName,
+              preferredId: existing.id,
+            );
+            if (reseeded != null) {
+              projects[existingIndex] = reseeded;
+              catalogUpdated = true;
+            }
+          }
         }
       }
 
@@ -100,21 +125,35 @@ class StorageService {
   }
 
   /// Extrai um arquivo BIM de assets para a pasta local de projetos do dispositivo.
-  Future<ProjectModel?> _seedProjectFromAsset(String assetPath, String originalName) async {
+  Future<ProjectModel?> _seedProjectFromAsset(
+    String assetPath,
+    String originalName, {
+    String? preferredId,
+  }) async {
     try {
-      final byteData = await rootBundle.load(assetPath);
-      final bytes = byteData.buffer.asUint8List();
       final projectsDir = await _getProjectsDir();
-      final String projectId = _uuid.v4();
+      final String projectId = preferredId ?? _uuid.v4();
       final destinationFileName = '${projectId}_$originalName';
       final destinationFile = File(p.join(projectsDir.path, destinationFileName));
-      await destinationFile.writeAsBytes(bytes, flush: true);
+
+      int lengthBytes;
+      if (await destinationFile.exists() && await destinationFile.length() > 0) {
+        lengthBytes = await destinationFile.length();
+      } else {
+        final byteData = await rootBundle.load(assetPath);
+        final bytes = byteData.buffer.asUint8List(
+          byteData.offsetInBytes,
+          byteData.lengthInBytes,
+        );
+        await destinationFile.writeAsBytes(bytes, flush: true);
+        lengthBytes = bytes.length;
+      }
 
       return ProjectModel(
         id: projectId,
         name: originalName,
         filePath: destinationFile.path,
-        fileSizeMB: bytes.length / (1024 * 1024),
+        fileSizeMB: lengthBytes / (1024 * 1024),
         format: 'IFC',
         createdAt: DateTime.now(),
       );

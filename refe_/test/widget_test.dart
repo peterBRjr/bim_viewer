@@ -8,6 +8,8 @@ import 'package:refe_/features/home/presentation/widgets/project_card.dart';
 import 'package:refe_/features/home/presentation/widgets/confirm_delete_dialog.dart';
 import 'package:refe_/features/viewer_3d/presentation/controllers/viewer_3d_controller.dart';
 import 'package:refe_/features/viewer_3d/presentation/widgets/bim_metadata_bottom_sheet.dart';
+import 'package:refe_/features/viewer_3d/domain/models/measurement_model.dart';
+import 'package:refe_/features/viewer_3d/presentation/widgets/measure_mode_overlay.dart';
 
 class FakeStorageService extends StorageService {
   List<ProjectModel> fakeCatalog;
@@ -318,6 +320,140 @@ void main() {
       expect(controller.loadingProgress, 0.0);
       expect(controller.selectedElement, isNull);
       expect(controller.errorMessage, isNull);
+    });
+  });
+
+  group('3D Free Span Measurement Mode Tests', () {
+    test('MeasurementModel parses map and computes deltas correctly', () {
+      final measMap = {
+        'id': 'meas_999',
+        'distance': 3.456,
+        'type': 'span',
+        'label': 'Vão Livre: 3,46 m',
+        'startPoint': {'x': 1.0, 'y': 0.0, 'z': 2.0},
+        'endPoint': {'x': 4.456, 'y': 0.0, 'z': 2.0},
+        'deltaX': 3.456,
+        'deltaY': 0.0,
+        'deltaZ': 0.0,
+      };
+
+      final model = MeasurementModel.fromMap(measMap);
+
+      expect(model.id, 'meas_999');
+      expect(model.distance, 3.456);
+      expect(model.formattedDistance, '3,46 m');
+      expect(model.isSpan, isTrue);
+      expect(model.isPointToPoint, isFalse);
+      expect(model.formattedDeltaX, '3,46 m');
+      expect(model.formattedDeltaY, '0,00 m');
+    });
+
+    test('Viewer3DController measurement state toggles and properties', () async {
+      final controller = Viewer3DController();
+
+      expect(controller.isMeasureMode, isFalse);
+      expect(controller.measureSubMode, 'span');
+      expect(controller.hasMeasurements, isFalse);
+      expect(controller.measurementCount, 0);
+
+      await controller.setMeasureMode(true, mode: 'span');
+      expect(controller.isMeasureMode, isTrue);
+      expect(controller.measureSubMode, 'span');
+
+      await controller.setMeasureSubMode('point_to_point');
+      expect(controller.measureSubMode, 'point_to_point');
+
+      await controller.clearMeasurements();
+      expect(controller.hasMeasurements, isFalse);
+      expect(controller.lastMeasurement, isNull);
+
+      await controller.setMeasureMode(false);
+      expect(controller.isMeasureMode, isFalse);
+    });
+
+    testWidgets('MeasureModeOverlay renders exact presentation card and submode tabs', (WidgetTester tester) async {
+      final controller = Viewer3DController();
+      bool closed = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: MeasureModeOverlay(
+              controller: controller,
+              onClose: () => closed = true,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verifica o card exato do usuário
+      expect(find.text('Modo de Medição'), findsOneWidget);
+      expect(
+        find.text('Calcule vãos livres (spans) diretamente no modelo 3D com um toque.'),
+        findsOneWidget,
+      );
+
+      // Verifica abas dos submodos
+      expect(find.text('Vão Livre (1 Toque)'), findsOneWidget);
+      expect(find.text('Ponto a Ponto'), findsOneWidget);
+
+      // Botão Concluir
+      expect(find.text('Concluir'), findsOneWidget);
+      await tester.tap(find.text('Concluir'));
+      expect(closed, isTrue);
+    });
+  });
+
+  group('Randon IFC Catalog & Local Streaming Tests', () {
+    testWidgets('App renders randon.ifc card in HomeScreen catalog', (WidgetTester tester) async {
+      final randonProject = ProjectModel(
+        id: 'randon-seed-1',
+        name: 'randon.ifc',
+        filePath: '/storage/projects/randon.ifc',
+        fileSizeMB: 92.12,
+        format: 'IFC',
+        createdAt: DateTime(2026, 11, 1),
+      );
+
+      final fakeStorage = FakeStorageService(initial: [randonProject]);
+      final controller = HomeController(storageService: fakeStorage);
+
+      await tester.pumpWidget(BimViewerApp(homeController: controller));
+      await tester.pumpAndSettle();
+
+      expect(find.text('randon.ifc'), findsOneWidget);
+      expect(find.text('.IFC'), findsOneWidget);
+      expect(find.text('92.12 MB'), findsOneWidget);
+      expect(find.text('Visualizar'), findsOneWidget);
+    });
+
+    test('Viewer3DController resilience, section cut, and ViewCube presets work properly', () async {
+      final controller = Viewer3DController();
+
+      expect(controller.isSectionCutActive, isFalse);
+      expect(controller.sectionCutRatio, 0.75);
+      expect(controller.currentCameraView, 'iso');
+      expect(controller.renderProcessCrashed, isFalse);
+
+      await controller.toggleSectionCut();
+      expect(controller.isSectionCutActive, isTrue);
+
+      await controller.setSectionCutRatio(0.45);
+      expect(controller.sectionCutRatio, 0.45);
+
+      await controller.setCameraView('top');
+      expect(controller.currentCameraView, 'top');
+
+      controller.handleRenderProcessGone(true);
+      expect(controller.renderProcessCrashed, isTrue);
+      expect(controller.isLoading, isFalse);
+      expect(controller.errorMessage, isNotNull);
+
+      controller.prepareWebViewRecovery('/storage/projects/randon.ifc', 'IFC');
+      expect(controller.renderProcessCrashed, isFalse);
+      expect(controller.errorMessage, isNull);
+      expect(controller.isLoading, isTrue);
     });
   });
 }
