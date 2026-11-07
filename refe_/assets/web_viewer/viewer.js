@@ -41,6 +41,9 @@ const state = {
   isSectionActive: false,
   sectionRatio: 1.0,
   cameraAnimFrame: null,
+  pivotAnimFrame: null,
+  isElementPivotActive: false,
+  activePivotElementId: null,
   gridHelper: null,
   archBumpTexture: null,
 };
@@ -109,6 +112,10 @@ function initEngine() {
     if (state.cameraAnimFrame) {
       cancelAnimationFrame(state.cameraAnimFrame);
       state.cameraAnimFrame = null;
+    }
+    if (state.pivotAnimFrame) {
+      cancelAnimationFrame(state.pivotAnimFrame);
+      state.pivotAnimFrame = null;
     }
   });
 
@@ -776,10 +783,98 @@ async function buildHierarchyMaps(modelID) {
 }
 
 /**
+ * Retorna o ponto alvo raiz do modelo (centro geométrico do projeto).
+ */
+function getRootPivotTarget() {
+  if (state.initialCameraTarget && (state.initialCameraTarget.x !== 0 || state.initialCameraTarget.y !== 0 || state.initialCameraTarget.z !== 0)) {
+    return state.initialCameraTarget.clone();
+  }
+  if (state.modelBox && !state.modelBox.isEmpty()) {
+    return state.modelBox.getCenter(new THREE.Vector3());
+  }
+  if (state.currentModel) {
+    const box = new THREE.Box3().setFromObject(state.currentModel);
+    if (!box.isEmpty()) return box.getCenter(new THREE.Vector3());
+  }
+  return new THREE.Vector3(0, 0, 0);
+}
+
+/**
+ * Transição suave do pivô de rotação dos dedos (OrbitControls target).
+ */
+function animatePivotTo(targetLookAt, durationMs = 240) {
+  if (!state.camera || !state.controls || !targetLookAt) return;
+  if (state.pivotAnimFrame) {
+    cancelAnimationFrame(state.pivotAnimFrame);
+    state.pivotAnimFrame = null;
+  }
+
+  const startTarget = state.controls.target.clone();
+  const startTime = performance.now();
+
+  function step(now) {
+    const elapsed = now - startTime;
+    const t = Math.min(1, elapsed / durationMs);
+    const ease = 1 - Math.pow(1 - t, 3); // Cubic ease-out
+
+    state.controls.target.lerpVectors(startTarget, targetLookAt, ease);
+    state.controls.update();
+
+    if (t < 1) {
+      state.pivotAnimFrame = requestAnimationFrame(step);
+    } else {
+      state.pivotAnimFrame = null;
+    }
+  }
+
+  state.pivotAnimFrame = requestAnimationFrame(step);
+}
+
+/**
+ * Define o elemento selecionado como eixo de navegação e órbita 3D dos dedos.
+ */
+function setElementPivot(pivotPoint, elementId) {
+  if (!pivotPoint || !state.controls || !state.camera) return;
+  state.isElementPivotActive = true;
+  state.activePivotElementId = elementId !== undefined ? Number(elementId) : null;
+  animatePivotTo(pivotPoint, 240);
+}
+
+/**
+ * Restaura o pivô de rotação para a raiz do modelo sem provocar pulos visuais bruscos.
+ * Mantém o enquadramento atual ao projetar o alvo ao longo da direção de visão da câmera.
+ */
+function restoreRootPivot(smooth = false) {
+  if (!state.controls || !state.camera) return;
+  if (state.pivotAnimFrame) {
+    cancelAnimationFrame(state.pivotAnimFrame);
+    state.pivotAnimFrame = null;
+  }
+
+  const rootCenter = getRootPivotTarget();
+  const currentDir = new THREE.Vector3();
+  state.camera.getWorldDirection(currentDir);
+
+  // Distância proporcional para manter a sensibilidade de órbita calibrada com a profundidade do modelo
+  const dist = Math.max(1.5, state.camera.position.distanceTo(rootCenter));
+  const stableTarget = state.camera.position.clone().addScaledVector(currentDir, dist);
+
+  if (smooth) {
+    animatePivotTo(stableTarget, 240);
+  } else {
+    state.controls.target.copy(stableTarget);
+    state.controls.update();
+  }
+
+  state.isElementPivotActive = false;
+  state.activePivotElementId = null;
+}
+
+/**
  * Aplica destaque visual e extrai metadados do elemento selecionado (IFC ou GLTF)
  */
 async function selectElement(hit) {
-  clearSelection();
+  clearSelection(false);
 
   const object = hit.object;
   if (!object) return;
@@ -795,13 +890,37 @@ async function selectElement(hit) {
         const idsToHighlight = aggregate ? aggregate.children : [expressID];
 
         // Aplica destaque em todas as geometrias do elemento composto
-        state.ifcLoader.ifcManager.createSubset({
+        const subset = state.ifcLoader.ifcManager.createSubset({
           modelID: object.modelID,
           ids: idsToHighlight,
           scene: state.scene,
           removePrevious: true,
           material: state.highlightMaterial
         });
+
+        // Configura o eixo de navegação com os dedos baseado no elemento selecionado
+        let pivotPoint = null;
+        try {
+          if (subset && subset.geometry) {
+            subset.geometry.computeBoundingBox();
+            if (subset.geometry.boundingBox && !subset.geometry.boundingBox.isEmpty()) {
+              pivotPoint = subset.geometry.boundingBox.getCenter(new THREE.Vector3());
+              if (subset.matrixWorld) {
+                pivotPoint.applyMatrix4(subset.matrixWorld);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Erro ao calcular centro geométrico do elemento IFC:', e);
+        }
+
+        if (!pivotPoint && hit.point) {
+          pivotPoint = hit.point.clone();
+        }
+
+        if (pivotPoint) {
+          setElementPivot(pivotPoint, targetID);
+        }
 
         state.selectedObject = {
           modelID: object.modelID,
@@ -906,6 +1025,25 @@ async function selectElement(hit) {
   const elementName = object.name || `Elemento BIM #${expressID}`;
   const category = object.userData.category || deduceBimCategory(object);
 
+  // Configura o eixo de navegação baseado no elemento selecionado
+  let pivotPoint = null;
+  try {
+    if (object.geometry) {
+      const box = new THREE.Box3().setFromObject(object);
+      if (!box.isEmpty()) {
+        pivotPoint = box.getCenter(new THREE.Vector3());
+      }
+    }
+  } catch (e) {}
+
+  if (!pivotPoint && hit.point) {
+    pivotPoint = hit.point.clone();
+  }
+
+  if (pivotPoint) {
+    setElementPivot(pivotPoint, expressID);
+  }
+
   const psets = object.userData.psets || {
     "Propriedades Gerais": {
       "ExpressID": expressID,
@@ -926,7 +1064,7 @@ async function selectElement(hit) {
 /**
  * Remove o destaque azul do elemento e notifica deseleção para o Flutter
  */
-function clearSelection() {
+function clearSelection(restorePivot = true) {
   const modelID = state.selectedObject?.modelID !== undefined
     ? state.selectedObject.modelID
     : (state.currentModel?.modelID);
@@ -986,6 +1124,9 @@ function clearSelection() {
 
   state.selectedObject = null;
   state.originalMaterial = null;
+  if (restorePivot && state.isElementPivotActive) {
+    restoreRootPivot(true);
+  }
   notifyFlutter('onElementDeselected');
 }
 
@@ -1166,7 +1307,7 @@ window.hideElement = function(expressID) {
   if (isNaN(id)) return;
 
   if (state.selectedObject) {
-    clearSelection();
+    clearSelection(false);
   }
 
   // Se o elemento possui partes na hierarquia de agregação, oculta todas as suas partes físicas
@@ -1185,6 +1326,12 @@ window.hideElement = function(expressID) {
     if (state.isolatedElementIds) {
       state.isolatedElementIds.clear();
     }
+  }
+
+  // Se o elemento que servia de pivô de navegação foi ocultado,
+  // restaura o pivô raiz sem alterar em nada o enquadramento visual da tela
+  if (state.isElementPivotActive) {
+    restoreRootPivot(false);
   }
 
   updateModelVisibility();
@@ -1219,6 +1366,7 @@ window.isolateElement = function(expressID) {
     if (state.isolatedElementIds) {
       state.isolatedElementIds.clear();
     }
+    restoreRootPivot(true);
   } else {
     state.isolatedElementId = id;
     state.isolatedElementIds = new Set(targetIds);
@@ -1234,6 +1382,7 @@ window.restoreAllVisibility = function() {
     state.isolatedElementIds.clear();
   }
   state.isPreviewingHidden = false;
+  restoreRootPivot(true);
   updateModelVisibility();
 };
 
@@ -1644,6 +1793,12 @@ function animateCameraTo(targetPos, targetLookAt, durationMs = 360) {
  */
 window.resetCamera = function() {
   if (!state.camera || !state.controls) return;
+  if (state.pivotAnimFrame) {
+    cancelAnimationFrame(state.pivotAnimFrame);
+    state.pivotAnimFrame = null;
+  }
+  state.isElementPivotActive = false;
+  state.activePivotElementId = null;
   animateCameraTo(state.initialCameraPos, state.initialCameraTarget, 340);
 };
 
@@ -1652,6 +1807,12 @@ window.resetCamera = function() {
  */
 window.setCameraView = function(viewName) {
   if (!state.camera || !state.controls) return;
+  if (state.pivotAnimFrame) {
+    cancelAnimationFrame(state.pivotAnimFrame);
+    state.pivotAnimFrame = null;
+  }
+  state.isElementPivotActive = false;
+  state.activePivotElementId = null;
   const box = state.modelBox && !state.modelBox.isEmpty()
     ? state.modelBox
     : (state.currentModel ? new THREE.Box3().setFromObject(state.currentModel) : null);
