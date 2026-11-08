@@ -332,4 +332,11 @@ class Viewer3dJsBridge {
       source: 'if (window.notifyViewportResized) window.notifyViewportResized();',
     );
   }
+
+  /// Limpa deterministamente a malha 3D e buffers WebAssembly/WebGL ao fechar ou descarregar o visualizador.
+  Future<void> disposeModel() async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.disposeCurrentModel) window.disposeCurrentModel();',
+    );
+  }
 }

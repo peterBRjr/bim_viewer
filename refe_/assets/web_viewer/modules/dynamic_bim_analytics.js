@@ -763,7 +763,12 @@ async function extractModelBimMetadataAndSpatialIndex(modelID) {
   }
 
   const categorySummary = {};
+  let catIndex = 0;
   for (const eid of uniqueCanonicalElements) {
+    if (++catIndex % 350 === 0) {
+      // Libera brevemente a thread para manter a renderização a 60 FPS no tablet de 4 GB RAM
+      await new Promise((r) => setTimeout(r, 0));
+    }
     let cat = 'IfcBuildingElement';
     try {
       cat = mgr.getIfcType(modelID, eid) || cat;

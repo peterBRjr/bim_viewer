@@ -40,14 +40,23 @@ class FilePickerService {
   static const List<String> supportedExtensions = ['glb', 'gltf', 'ifc'];
 
   /// Abre a interface nativa de seleção de arquivos configurada exclusivamente
-  /// para modelos 3D e arquivos BIM.
+  /// para modelos 3D e arquivos BIM (.ifc, .glb, .gltf).
+  /// No Android, utiliza FileType.any para evitar que o seletor One UI da Samsung mascare arquivos .ifc.
   Future<SelectedBimFile?> pickBimFile() async {
     try {
-      final PlatformFile? picked = await FilePicker.pickFile(
-        type: FileType.custom,
-        allowedExtensions: supportedExtensions,
-        dialogTitle: 'Selecione um modelo BIM ou 3D',
-      );
+      final PlatformFile? picked;
+      if (Platform.isAndroid) {
+        picked = await FilePicker.pickFile(
+          type: FileType.any,
+          dialogTitle: 'Selecione um modelo BIM ou 3D (.ifc, .glb, .gltf)',
+        );
+      } else {
+        picked = await FilePicker.pickFile(
+          type: FileType.custom,
+          allowedExtensions: supportedExtensions,
+          dialogTitle: 'Selecione um modelo BIM ou 3D',
+        );
+      }
 
       if (picked == null) {
         return null;
@@ -66,7 +75,18 @@ class FilePickerService {
       String format = picked.extension?.toUpperCase() ?? '';
       if (format.isEmpty) {
         final extFromPath = p.extension(picked.name).replaceAll('.', '').toUpperCase();
-        format = extFromPath.isNotEmpty ? extFromPath : 'GLB';
+        format = extFromPath.isNotEmpty ? extFromPath : '';
+      }
+
+      final cleanFormat = format.toLowerCase();
+      if (!supportedExtensions.contains(cleanFormat)) {
+        developer.log(
+          'Formato incompatível selecionado: $format (${picked.name})',
+          name: 'FilePickerService',
+        );
+        throw Exception(
+          'Formato não suportado ($format). Selecione um arquivo BIM (.ifc, .glb ou .gltf).',
+        );
       }
 
       // Cálculo defensivo do tamanho em MB

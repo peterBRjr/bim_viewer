@@ -323,12 +323,10 @@ function disposeThreeObject(obj) {
 }
 
 /**
- * Limpa o modelo atual da memória WebGL / WebAssembly e despacha o ArrayBuffer para o loader adequado.
+ * Limpa o modelo atual da memória WebGL / WebAssembly de forma determinística
+ * liberando buffers geométricos, estruturas WASM e memória GPU (essencial para tablets de 4 GB RAM).
  */
-function loadBimArrayBuffer(arrayBuffer, format) {
-  const cleanFormat = (format || 'GLB').toUpperCase().trim();
-
-  // Remove modelo anterior e limpa memória se existir
+function disposeCurrentModel() {
   if (state.currentModel) {
     clearSelection();
     if (state.ifcLoader && state.currentModel.modelID !== undefined) {
@@ -352,6 +350,22 @@ function loadBimArrayBuffer(arrayBuffer, format) {
   if (typeof resetBimAnalyticsState === 'function') {
     resetBimAnalyticsState();
   }
+  if (state.renderer) {
+    state.renderer.renderLists?.dispose();
+  }
+  if (typeof requestRender === 'function') {
+    requestRender(2);
+  }
+}
+
+/**
+ * Limpa o modelo atual da memória WebGL / WebAssembly e despacha o ArrayBuffer para o loader adequado.
+ */
+function loadBimArrayBuffer(arrayBuffer, format) {
+  const cleanFormat = (format || 'GLB').toUpperCase().trim();
+
+  // Remove modelo anterior e limpa memória GPU/WASM
+  disposeCurrentModel();
 
   if (cleanFormat === 'GLB' || cleanFormat === 'GLTF') {
     loadGltfModel(arrayBuffer);
@@ -550,24 +564,39 @@ async function loadIfcModel(arrayBuffer) {
     // Enquadra a câmera técnica imediatamente antes de mapear agregados
     fitModelToFrame(ifcModel);
 
-    // Mapeia hierarquia de agregados, pavimentos (IfcBuildingStorey), tipos e especificações openBIM do arquivo
-    try {
-      await buildHierarchyMaps(ifcModel.modelID);
-    } catch (e) {
-      console.warn('Erro ao construir mapa de hierarquia agregada:', e);
+    // Pipeline Progressivo Render-First (Prioridade Máxima para Interatividade):
+    // 1. Renderiza os primeiros frames da malha consolidada no WebGL imediatamente
+    if (typeof requestRender === 'function') {
+      requestRender(8);
     }
-
-    try {
-      if (typeof extractModelBimMetadataAndSpatialIndex === 'function') {
-        await extractModelBimMetadataAndSpatialIndex(ifcModel.modelID);
-      }
-    } catch (e) {
-      console.warn('Erro ao indexar metadados BIM e pavimentos:', e);
-    }
-
-    notifyFlutter('onLoadingProgress', { progress: 100 });
+    notifyFlutter('onLoadingProgress', { progress: 92 });
     const hudEl = document.getElementById('hud-text');
-    if (hudEl) hudEl.innerText = 'Modelo IFC Renderizado (WebAssembly)';
+    if (hudEl) hudEl.innerText = 'Modelo 3D Renderizado';
+
+    // 2. Despacha hierarquia de agregados, pavimentos e metadados em segundo plano não-bloqueante
+    setTimeout(async () => {
+      if (!state.currentModel || state.currentModel.modelID !== ifcModel.modelID) return;
+
+      try {
+        await buildHierarchyMaps(ifcModel.modelID);
+      } catch (e) {
+        console.warn('Erro ao construir mapa de hierarquia agregada:', e);
+      }
+
+      try {
+        if (typeof extractModelBimMetadataAndSpatialIndex === 'function') {
+          await extractModelBimMetadataAndSpatialIndex(ifcModel.modelID);
+        }
+      } catch (e) {
+        console.warn('Erro ao indexar metadados BIM e pavimentos:', e);
+      }
+
+      notifyFlutter('onLoadingProgress', { progress: 100 });
+      if (hudEl) hudEl.innerText = 'Modelo IFC Pronto (openBIM)';
+      if (typeof requestRender === 'function') {
+        requestRender(4);
+      }
+    }, 20);
   } catch (err) {
     console.error('Erro no processamento IFC:', err);
     notifyFlutter('onViewerError', { message: `Erro ao processar IFC: ${err.message || err}` });
@@ -579,6 +608,7 @@ window.BimEngine.initIfcEngine = initIfcEngine;
 window.BimEngine.installSmartIfcPipeline = installSmartIfcPipeline;
 window.BimEngine.base64ToArrayBuffer = base64ToArrayBuffer;
 window.BimEngine.disposeThreeObject = disposeThreeObject;
+window.BimEngine.disposeCurrentModel = disposeCurrentModel;
 window.BimEngine.loadBimArrayBuffer = loadBimArrayBuffer;
 window.BimEngine.loadBimModelFromUrl = loadBimModelFromUrl;
 window.BimEngine.loadBimModel = loadBimModel;
@@ -589,6 +619,7 @@ window.initIfcEngine = initIfcEngine;
 window.installSmartIfcPipeline = installSmartIfcPipeline;
 window.base64ToArrayBuffer = base64ToArrayBuffer;
 window.disposeThreeObject = disposeThreeObject;
+window.disposeCurrentModel = disposeCurrentModel;
 window.loadBimArrayBuffer = loadBimArrayBuffer;
 window.loadBimModelFromUrl = loadBimModelFromUrl;
 window.loadBimModel = loadBimModel;

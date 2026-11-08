@@ -135,6 +135,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     if (_isDynamicViewActive) {
       _restorePreviousOrientationSafe();
     }
+    _jsBridge.disposeModel();
     _jsBridge.detach();
     super.dispose();
   }
