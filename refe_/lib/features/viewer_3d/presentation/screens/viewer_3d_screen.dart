@@ -47,7 +47,7 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
   @override
   void dispose() {
     try {
-      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]).catchError((_) {});
     } catch (_) {}
     if (widget.controller == null) {
       _controller.dispose();
@@ -365,7 +365,13 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                         },
                         onHideElement: () => _handleHideElement(_controller.selectedElement!),
                         onIsolateElement: () => _handleIsolateElement(_controller.selectedElement!),
-                        onDynamicView: () => _controller.enterDynamicView(),
+                        onDynamicView: () {
+                          final isCurrentlyLandscape =
+                              MediaQuery.of(context).orientation == Orientation.landscape;
+                          _controller.enterDynamicView(
+                            currentlyLandscape: isCurrentlyLandscape,
+                          );
+                        },
                         onClose: () => _controller.clearSelectedElement(),
                       ),
 

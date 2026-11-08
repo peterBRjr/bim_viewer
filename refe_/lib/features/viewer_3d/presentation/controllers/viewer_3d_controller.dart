@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
@@ -45,13 +46,20 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   // Estado da Visualização Dinâmica Horizontal (Split-Screen Personalizável + Níveis + Specs openBIM)
   bool _isDynamicViewActive = false;
+  bool _isSwitchingDynamicElement = false;
   double _dynamicSplitRatio = 0.46; // 46% Viewport 3D (perto da câmera) | 54% Especificações e Projeto
   int? _selectedStoreyFilterId; // null = Todos os Níveis (Projeto Completo)
   bool _highlightSimilarIn3D = false;
   bool _isDynamicXrayActive = false;
+  bool _hadSimilarHighlightsInJs = false;
+  bool _hadXrayInJs = false;
   BimProjectSpecs? _projectSpecs;
-  Timer? _orientationUnlockTimer;
+  BimElementMetadata? _preDynamicElement;
+  int? _preDynamicIsolatedElementId;
+  bool _wasLandscapeBeforeDynamic = false;
   Timer? _viewportResizeTimer;
+  Timer? _elementSwitchWatchdog;
+  bool _isDisposed = false;
 
   String? _pendingFilePath;
   String? _pendingFormat;
@@ -103,6 +111,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   // Getters da Visualização Dinâmica Horizontal
   bool get isDynamicViewActive => _isDynamicViewActive;
+  bool get isSwitchingDynamicElement => _isSwitchingDynamicElement;
   double get dynamicSplitRatio => _dynamicSplitRatio;
   int? get selectedStoreyFilterId => _selectedStoreyFilterId;
   bool get highlightSimilarIn3D => _highlightSimilarIn3D;
@@ -118,10 +127,11 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   @override
   void dispose() {
-    _orientationUnlockTimer?.cancel();
+    _isDisposed = true;
     _viewportResizeTimer?.cancel();
+    _elementSwitchWatchdog?.cancel();
     if (_isDynamicViewActive) {
-      _restorePortraitOrientationSafe(scheduleUnlock: false);
+      _restorePreviousOrientationSafe();
     }
     _jsBridge.detach();
     super.dispose();
@@ -160,6 +170,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   @override
   void onElementSelected(BimElementMetadata metadata) {
+    if (_isDisposed) return;
     final previousId = _selectedElement?.expressID;
     _selectedElement = metadata;
 
@@ -171,20 +182,30 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
         _selectedStoreyFilterId = null;
       }
 
-      if (previousId != metadata.expressID) {
-        _jsBridge.focusElementInDynamicView(metadata.expressID);
+      // Evita chamadas JS duplicadas quando selectElementByExpressId já focou e atualizou subsets no WebGL
+      if (!metadata.alreadyFocusedInJs) {
+        if (previousId != metadata.expressID) {
+          _jsBridge.focusElementInDynamicView(metadata.expressID);
+        }
+        _syncDynamic3DHighlights();
       }
-      _syncDynamic3DHighlights();
     }
 
     notifyListeners();
+    _completeDynamicTransitionAfterFrame();
+  }
+
+  @override
+  void onElementTransitionBusy(int expressID) {
+    if (_isDisposed) return;
+    _cancelDynamicTransitionImmediate();
   }
 
   @override
   void onElementDeselected() {
-    // Na Visualização Dinâmica, protege contra toque acidental no fundo vazio enquanto orbita a peça na obra
+    if (_isDisposed) return;
+    // Na Visualização Dinâmica, mantém o elemento atual inspecionado sem disparar loop de resseleção
     if (_isDynamicViewActive && _selectedElement != null) {
-      _jsBridge.selectElementByExpressId(_selectedElement!.expressID, focusCamera: false);
       return;
     }
 
@@ -204,6 +225,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   void onViewerError(String message) {
     _errorMessage = message;
     _isLoading = false;
+    _cancelDynamicTransitionImmediate(notify: false);
     notifyListeners();
   }
 
@@ -260,41 +282,60 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   // COMANDOS DA VISUALIZAÇÃO DINÂMICA HORIZONTAL
   // =========================================================================
 
-  /// Ativa a Visualização Dinâmica: gira a tela para horizontal (landscape com câmera à esquerda),
-  /// enquadra o elemento selecionado na obra e abre o painel divisível de especificações BIM e níveis.
-  Future<void> enterDynamicView() async {
+  /// Ativa a Visualização Dinâmica: salva o estado anterior (isolamento, orientação e câmera),
+  /// gira a tela para horizontal (landscape com câmera à esquerda) e enquadra o elemento na obra.
+  Future<void> enterDynamicView({bool currentlyLandscape = false}) async {
     if (_selectedElement == null) return;
 
-    _orientationUnlockTimer?.cancel();
     _viewportResizeTimer?.cancel();
+    _cancelDynamicTransitionImmediate(notify: false);
+    if (!_isDynamicViewActive) {
+      _preDynamicElement = _selectedElement;
+      _preDynamicIsolatedElementId = _isolatedElementId;
+      _wasLandscapeBeforeDynamic = currentlyLandscape;
+    }
+
     _isDynamicViewActive = true;
     _isMeasureMode = false;
     _selectedStoreyFilterId = null;
+    _hadSimilarHighlightsInJs = false;
+    _hadXrayInJs = false;
     notifyListeners();
 
     _lockLandscapeOrientationSafe();
 
     final expressID = _selectedElement!.expressID;
-    await _jsBridge.focusElementInDynamicView(expressID);
+    await _jsBridge.enterDynamicViewMode(expressID);
   }
 
-  /// Sai da Visualização Dinâmica, restaura a orientação vertical padrão e limpa destaques auxiliares.
+  /// Sai da Visualização Dinâmica e restaura fielmente como estava antes:
+  /// orientação anterior (retrato), posição/alvo/frustum da câmera 3D, estado de isolamento, materiais sem Raio-X e TabBar.
   Future<void> exitDynamicView() async {
     if (!_isDynamicViewActive) return;
 
+    _cancelDynamicTransitionImmediate(notify: false);
     _isDynamicViewActive = false;
     _highlightSimilarIn3D = false;
     _isDynamicXrayActive = false;
+    _hadSimilarHighlightsInJs = false;
+    _hadXrayInJs = false;
+    _selectedStoreyFilterId = null;
+    if (_preDynamicElement != null) {
+      _selectedElement = _preDynamicElement;
+    }
+    _isolatedElementId = _preDynamicIsolatedElementId;
+    _preDynamicElement = null;
     notifyListeners();
 
-    await _jsBridge.clearSimilarHighlights();
-    await _jsBridge.setDynamicXrayContext(false, const []);
-    _restorePortraitOrientationSafe();
+    await _jsBridge.exitDynamicViewMode();
+    _restorePreviousOrientationSafe();
 
-    // Reajusta o tamanho do canvas WebGL após o retorno da rotação para retrato
+    // Reajusta o tamanho do canvas WebGL após o retorno da rotação e da AppBar
     _viewportResizeTimer?.cancel();
-    _viewportResizeTimer = Timer(const Duration(milliseconds: 300), () {
-      _jsBridge.notifyViewportResized();
+    _viewportResizeTimer = Timer(const Duration(milliseconds: 320), () {
+      if (!_isDisposed) {
+        _jsBridge.notifyViewportResized();
+      }
     });
   }
 
@@ -312,13 +353,14 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     _dynamicSplitRatio = 0.46;
     notifyListeners();
     _jsBridge.notifyViewportResized();
-    if (_selectedElement != null) {
+    if (_selectedElement != null && !_isSwitchingDynamicElement) {
       _jsBridge.focusElementInDynamicView(_selectedElement!.expressID);
     }
   }
 
   /// Altera o Nível (`IfcBuildingStorey`) selecionado no DropdownList da Visualização Dinâmica.
   Future<void> setStoreyFilter(int? storeyId) async {
+    if (_isSwitchingDynamicElement) return;
     _selectedStoreyFilterId = storeyId;
     notifyListeners();
     await _syncDynamic3DHighlights();
@@ -326,6 +368,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   /// Alterna o destaque 3D de todas as peças idênticas existentes no nível selecionado.
   Future<void> toggleHighlightSimilarIn3D() async {
+    if (_isSwitchingDynamicElement) return;
     _highlightSimilarIn3D = !_highlightSimilarIn3D;
     notifyListeners();
     await _syncDynamic3DHighlights();
@@ -333,6 +376,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   /// Alterna o modo Contexto Raio-X da Obra (edifício translúcido destacando a peça em inspeção).
   Future<void> toggleDynamicXrayContext() async {
+    if (_isSwitchingDynamicElement) return;
     _isDynamicXrayActive = !_isDynamicXrayActive;
     notifyListeners();
     await _syncDynamic3DHighlights();
@@ -340,13 +384,76 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   /// Reenquadra a câmera 3D diretamente sobre a peça atual na obra.
   Future<void> focusCurrentElementInDynamicView() async {
-    if (_selectedElement == null) return;
+    if (_selectedElement == null || _isSwitchingDynamicElement) return;
     await _jsBridge.focusElementInDynamicView(_selectedElement!.expressID);
   }
 
-  /// Navega entre as instâncias da mesma peça no nível selecionado (ex: Peça 2 de 3) voando a câmera até ela.
+  /// Navega entre as instâncias da mesma peça no nível selecionado (ex: Pilar 2 de 146)
+  /// exigindo conclusão integral do carregamento e renderização atual antes de aceitar novo clique.
   Future<void> inspectPieceInstance(int expressID) async {
-    await _jsBridge.selectElementByExpressId(expressID, focusCamera: true);
+    if (_isSwitchingDynamicElement) return;
+    if (_selectedElement?.expressID == expressID) {
+      await _jsBridge.focusElementInDynamicView(expressID);
+      return;
+    }
+
+    _beginDynamicTransition();
+    try {
+      await _jsBridge.selectElementByExpressId(expressID, focusCamera: true);
+    } catch (_) {
+      _cancelDynamicTransitionImmediate();
+    }
+  }
+
+  void _beginDynamicTransition() {
+    _isSwitchingDynamicElement = true;
+    _elementSwitchWatchdog?.cancel();
+    _elementSwitchWatchdog = Timer(const Duration(seconds: 4), () {
+      if (!_isDisposed && _isSwitchingDynamicElement) {
+        _isSwitchingDynamicElement = false;
+        notifyListeners();
+      }
+    });
+    notifyListeners();
+  }
+
+  void _completeDynamicTransitionAfterFrame() {
+    _elementSwitchWatchdog?.cancel();
+    _elementSwitchWatchdog = null;
+    if (!_isSwitchingDynamicElement) return;
+
+    try {
+      final scheduler = SchedulerBinding.instance;
+      if (scheduler.hasScheduledFrame || scheduler.schedulerPhase != SchedulerPhase.idle) {
+        scheduler.addPostFrameCallback((_) {
+          if (!_isDisposed && _isSwitchingDynamicElement) {
+            _isSwitchingDynamicElement = false;
+            notifyListeners();
+          }
+        });
+        return;
+      }
+    } catch (_) {
+      // Ambiente de teste unitário puro sem SchedulerBinding ativo
+    }
+
+    Future.microtask(() {
+      if (!_isDisposed && _isSwitchingDynamicElement) {
+        _isSwitchingDynamicElement = false;
+        notifyListeners();
+      }
+    });
+  }
+
+  void _cancelDynamicTransitionImmediate({bool notify = true}) {
+    _elementSwitchWatchdog?.cancel();
+    _elementSwitchWatchdog = null;
+    if (_isSwitchingDynamicElement) {
+      _isSwitchingDynamicElement = false;
+      if (notify && !_isDisposed) {
+        notifyListeners();
+      }
+    }
   }
 
   Future<void> _syncDynamic3DHighlights() async {
@@ -356,20 +463,24 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     final instancesInFilter = elem.analytics?.instancesForStorey(_selectedStoreyFilterId) ?? [elem.expressID];
 
     if (_highlightSimilarIn3D && instancesInFilter.isNotEmpty) {
+      _hadSimilarHighlightsInJs = true;
       await _jsBridge.highlightSimilarElements(
         instancesInFilter,
         activeExpressID: elem.expressID,
       );
-    } else {
+    } else if (_hadSimilarHighlightsInJs) {
+      _hadSimilarHighlightsInJs = false;
       await _jsBridge.clearSimilarHighlights();
     }
 
     if (_isDynamicXrayActive) {
+      _hadXrayInJs = true;
       final keepIds = _highlightSimilarIn3D && instancesInFilter.isNotEmpty
           ? instancesInFilter
           : [elem.expressID];
       await _jsBridge.setDynamicXrayContext(true, keepIds);
-    } else {
+    } else if (_hadXrayInJs) {
+      _hadXrayInJs = false;
       await _jsBridge.setDynamicXrayContext(false, const []);
     }
   }
@@ -384,20 +495,19 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     } catch (_) {}
   }
 
-  void _restorePortraitOrientationSafe({bool scheduleUnlock = true}) {
+  void _restorePreviousOrientationSafe() {
     try {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-      ]).catchError((_) {});
-      if (scheduleUnlock) {
-        _orientationUnlockTimer?.cancel();
-        _orientationUnlockTimer = Timer(const Duration(milliseconds: 450), () {
-          if (!_isDynamicViewActive) {
-            try {
-              SystemChrome.setPreferredOrientations(DeviceOrientation.values).catchError((_) {});
-            } catch (_) {}
-          }
-        });
+      if (_wasLandscapeBeforeDynamic) {
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]).catchError((_) {});
+      } else {
+        // Mantém fixo em portraitUp para evitar que o acelerômetro gire de volta para horizontal
+        // caso o usuário ainda esteja segurando o celular deitado no instante em que clicou em Voltar.
+        SystemChrome.setPreferredOrientations([
+          DeviceOrientation.portraitUp,
+        ]).catchError((_) {});
       }
     } catch (_) {}
   }
@@ -408,9 +518,10 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   /// Realiza streaming HTTP local (ou leitura direta) e injeta o modelo BIM no motor WebGL via JS.
   Future<void> loadModelFile(String filePath, String format) async {
+    _cancelDynamicTransitionImmediate(notify: false);
     if (_isDynamicViewActive) {
       _isDynamicViewActive = false;
-      _restorePortraitOrientationSafe();
+      _restorePreviousOrientationSafe();
     }
     _isLoading = true;
     _loadingProgress = 5.0;
@@ -420,6 +531,8 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     _selectedStoreyFilterId = null;
     _highlightSimilarIn3D = false;
     _isDynamicXrayActive = false;
+    _hadSimilarHighlightsInJs = false;
+    _hadXrayInJs = false;
     _hiddenElementIds.clear();
     _hiddenElementsMap.clear();
     _isolatedElementId = null;
@@ -521,6 +634,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
       'Processo de renderização WebView encerrado pelo sistema (didCrash: $didCrash)',
       name: 'Viewer3DController',
     );
+    _cancelDynamicTransitionImmediate(notify: false);
     _isViewerReady = false;
     _isLoading = false;
     _renderProcessCrashed = true;

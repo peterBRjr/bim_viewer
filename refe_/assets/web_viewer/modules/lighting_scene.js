@@ -67,6 +67,9 @@ function initScene(container) {
     depthTest: true,
     transparent: true,
     opacity: 0.88,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
   });
 
   // 7. Material Fantasma Translúcido para Revelação de Elementos Ocultados (Amber/Orange #F59E0B)
@@ -91,6 +94,9 @@ function initScene(container) {
     depthTest: true,
     transparent: true,
     opacity: 0.84,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   });
 
   // 7c. Material Raio-X Arquitetônico para Contexto da Obra na Visualização Dinâmica

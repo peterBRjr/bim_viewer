@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'core/services/localhost_server_service.dart';
 import 'core/theme/app_theme.dart';
 import 'features/home/presentation/controllers/home_controller.dart';
@@ -6,6 +7,7 @@ import 'features/home/presentation/screens/home_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   await LocalhostServerService.start();
   runApp(const BimViewerApp());
 }

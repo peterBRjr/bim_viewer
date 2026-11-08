@@ -32,10 +32,38 @@ function decodeIfcStepText(raw) {
   return str;
 }
 
+let _dynamicResizeTimer = null;
+
 /**
- * Limpa todo o índice espacial e analítico ao carregar novo modelo.
+ * Aguarda o próximo ciclo de renderização WebGL (requestAnimationFrame + flush do frame)
+ * garantindo que geometria, materiais e câmera terminaram de ser desenhados antes de aceitar nova ação.
+ */
+function waitForNextRenderedFrame() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => {
+        try {
+          if (state.controls) state.controls.update();
+          if (state.renderer && state.scene && state.camera) {
+            state.renderer.render(state.scene, state.camera);
+          }
+        } catch (e) {}
+        requestAnimationFrame(() => resolve());
+      });
+    } else {
+      setTimeout(resolve, 16);
+    }
+  });
+}
+
+/**
+ * Limpa todo o índice espacial, caches O(1) e analítico ao carregar novo modelo.
  */
 function resetBimAnalyticsState() {
+  if (_dynamicResizeTimer) {
+    clearTimeout(_dynamicResizeTimer);
+    _dynamicResizeTimer = null;
+  }
   state.elementBounds.clear();
   state.storeys = [];
   state.elementToStorey.clear();
@@ -43,12 +71,234 @@ function resetBimAnalyticsState() {
   state.elementToType.clear();
   state.typeToElements.clear();
   state.elementMetaIndex.clear();
+  state.elementCategoryMap.clear();
+  state.elementToPsetIds.clear();
+  state.elementToMaterialIds.clear();
+  state.relationIndexesReady = false;
+  state.relationIndexPromise = null;
+  state.psetPropsCache.clear();
+  state.materialPropsCache.clear();
+  state.typePropsCache.clear();
+  state.pieceAnalyticsCache.clear();
+  state.enrichedPayloadCache.clear();
   state.bimProjectSpecs = null;
   state.lengthUnitScale = 0.001;
+  state.isDynamicViewActive = false;
+  state.isTransitioningElement = false;
   state.isDynamicXrayActive = false;
   state.dynamicXrayKeepIds.clear();
   state.similarHighlightedIds = [];
+  state.similarSubsetSignature = '';
+  state.preDynamicViewSnapshot = null;
   clearSimilarHighlights();
+}
+
+/**
+ * Constrói uma única vez (em fatias não-bloqueantes) o índice reverso O(1) de PropertySets
+ * (IFCRELDEFINESBYPROPERTIES) e Materiais (IFCRELASSOCIATESMATERIAL) por ExpressID.
+ * Elimina a varredura linear de dezenas de milhares de linhas STEP a cada clique em peça!
+ */
+async function ensureRelationIndexes(modelID) {
+  if (state.relationIndexesReady) return;
+  if (state.relationIndexPromise) {
+    await state.relationIndexPromise;
+    return;
+  }
+
+  state.relationIndexPromise = (async () => {
+    const mgr = state.ifcLoader?.ifcManager;
+    const api = mgr?.state?.api;
+    if (!api || typeof api.GetLineIDsWithType !== 'function' || typeof WebIFC === 'undefined') {
+      state.relationIndexesReady = true;
+      return;
+    }
+
+    const addMapping = (map, targetId, relValueId) => {
+      let arr = map.get(targetId);
+      if (!arr) {
+        arr = [relValueId];
+        map.set(targetId, arr);
+      } else if (!arr.includes(relValueId)) {
+        arr.push(relValueId);
+      }
+    };
+
+    // 1. Índice reverso de IFCRELDEFINESBYPROPERTIES (elemento -> psetIds[])
+    try {
+      if (WebIFC.IFCRELDEFINESBYPROPERTIES !== undefined) {
+        const linesMaybe = api.GetLineIDsWithType(modelID, WebIFC.IFCRELDEFINESBYPROPERTIES);
+        const lines = (linesMaybe && typeof linesMaybe.then === 'function') ? await linesMaybe : linesMaybe;
+        const count = lines && typeof lines.size === 'function' ? lines.size() : 0;
+
+        for (let i = 0; i < count; i++) {
+          if (i > 0 && i % 4000 === 0) {
+            await new Promise((r) => setTimeout(r, 0));
+          }
+          const relId = lines.get(i);
+          const relMaybe = api.GetLine(modelID, relId, false);
+          const rel = (relMaybe && typeof relMaybe.then === 'function') ? await relMaybe : relMaybe;
+          if (!rel) continue;
+
+          const psetId = Number(rel.RelatingPropertyDefinition?.value);
+          if (isNaN(psetId)) continue;
+
+          const related = rel.RelatedObjects;
+          if (Array.isArray(related)) {
+            for (let j = 0; j < related.length; j++) {
+              const rawItem = related[j];
+              const eid = Number(rawItem?.value !== undefined ? rawItem.value : rawItem);
+              if (isNaN(eid)) continue;
+              addMapping(state.elementToPsetIds, eid, psetId);
+              const agg = state.childToParent.get(eid);
+              if (agg && agg.parentId) {
+                addMapping(state.elementToPsetIds, agg.parentId, psetId);
+              }
+            }
+          } else if (related?.value !== undefined) {
+            const eid = Number(related.value);
+            if (!isNaN(eid)) addMapping(state.elementToPsetIds, eid, psetId);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Aviso ao indexar IFCRELDEFINESBYPROPERTIES:', err);
+    }
+
+    // 2. Índice reverso de IFCRELASSOCIATESMATERIAL (elemento/tipo -> matIds[])
+    try {
+      if (WebIFC.IFCRELASSOCIATESMATERIAL !== undefined) {
+        const linesMaybe = api.GetLineIDsWithType(modelID, WebIFC.IFCRELASSOCIATESMATERIAL);
+        const lines = (linesMaybe && typeof linesMaybe.then === 'function') ? await linesMaybe : linesMaybe;
+        const count = lines && typeof lines.size === 'function' ? lines.size() : 0;
+
+        for (let i = 0; i < count; i++) {
+          if (i > 0 && i % 4000 === 0) {
+            await new Promise((r) => setTimeout(r, 0));
+          }
+          const relId = lines.get(i);
+          const relMaybe = api.GetLine(modelID, relId, false);
+          const rel = (relMaybe && typeof relMaybe.then === 'function') ? await relMaybe : relMaybe;
+          if (!rel) continue;
+
+          const matId = Number(rel.RelatingMaterial?.value);
+          if (isNaN(matId)) continue;
+
+          const related = rel.RelatedObjects;
+          if (Array.isArray(related)) {
+            for (let j = 0; j < related.length; j++) {
+              const rawItem = related[j];
+              const eid = Number(rawItem?.value !== undefined ? rawItem.value : rawItem);
+              if (isNaN(eid)) continue;
+              addMapping(state.elementToMaterialIds, eid, matId);
+              const agg = state.childToParent.get(eid);
+              if (agg && agg.parentId) {
+                addMapping(state.elementToMaterialIds, agg.parentId, matId);
+              }
+            }
+          } else if (related?.value !== undefined) {
+            const eid = Number(related.value);
+            if (!isNaN(eid)) addMapping(state.elementToMaterialIds, eid, matId);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Aviso ao indexar IFCRELASSOCIATESMATERIAL:', err);
+    }
+
+    state.relationIndexesReady = true;
+  })();
+
+  try {
+    await state.relationIndexPromise;
+  } finally {
+    state.relationIndexPromise = null;
+  }
+}
+
+/**
+ * Busca em O(1) todos os PropertySets e ElementQuantities associados ao elemento (com cache LRU simples).
+ */
+async function getElementPropertySetsFast(modelID, targetID) {
+  const mgr = state.ifcLoader?.ifcManager;
+  if (!mgr) return [];
+
+  await ensureRelationIndexes(modelID);
+
+  // Se o ambiente não possuir API WASM direta (ex: mock de teste), faz fallback seguro
+  if (!mgr.state?.api || typeof mgr.state.api.GetLineIDsWithType !== 'function') {
+    try {
+      return (await mgr.getPropertySets(modelID, targetID, true)) || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  const psetIds = state.elementToPsetIds.get(targetID);
+  if (!psetIds || psetIds.length === 0) return [];
+
+  const results = [];
+  for (let i = 0; i < psetIds.length; i++) {
+    const pid = psetIds[i];
+    let psetObj = state.psetPropsCache.get(pid);
+    if (!psetObj) {
+      try {
+        psetObj = await mgr.getItemProperties(modelID, pid, true);
+        if (psetObj) {
+          if (state.psetPropsCache.size > 1500) {
+            const oldestKey = state.psetPropsCache.keys().next().value;
+            state.psetPropsCache.delete(oldestKey);
+          }
+          state.psetPropsCache.set(pid, psetObj);
+        }
+      } catch (e) {}
+    }
+    if (psetObj) results.push(psetObj);
+  }
+  return results;
+}
+
+/**
+ * Busca em O(1) os materiais e camadas construtivas associados ao elemento ou ao seu Tipo IFC.
+ */
+async function getElementMaterialsFast(modelID, targetID) {
+  const mgr = state.ifcLoader?.ifcManager;
+  if (!mgr) return [];
+
+  await ensureRelationIndexes(modelID);
+
+  if (!mgr.state?.api || typeof mgr.state.api.GetLineIDsWithType !== 'function') {
+    try {
+      return (await mgr.getMaterialsProperties(modelID, targetID, true)) || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  const directMatIds = state.elementToMaterialIds.get(targetID) || [];
+  const typeInfo = state.elementToType.get(targetID);
+  const typeMatIds = (typeInfo && typeInfo.typeId) ? (state.elementToMaterialIds.get(typeInfo.typeId) || []) : [];
+
+  const combinedIds = directMatIds.length > 0 ? directMatIds.slice() : [];
+  for (const tid of typeMatIds) {
+    if (!combinedIds.includes(tid)) combinedIds.push(tid);
+  }
+  if (combinedIds.length === 0) return [];
+
+  const results = [];
+  for (let i = 0; i < combinedIds.length; i++) {
+    const mid = combinedIds[i];
+    let matObj = state.materialPropsCache.get(mid);
+    if (!matObj) {
+      try {
+        matObj = await mgr.getItemProperties(modelID, mid, true);
+        if (matObj) {
+          state.materialPropsCache.set(mid, matObj);
+        }
+      } catch (e) {}
+    }
+    if (matObj) results.push(matObj);
+  }
+  return results;
 }
 
 /**
@@ -518,6 +768,7 @@ async function extractModelBimMetadataAndSpatialIndex(modelID) {
     try {
       cat = mgr.getIfcType(modelID, eid) || cat;
     } catch (e) {}
+    state.elementCategoryMap.set(eid, String(cat).toUpperCase());
     categorySummary[cat] = (categorySummary[cat] || 0) + 1;
   }
 
@@ -549,6 +800,13 @@ async function extractModelBimMetadataAndSpatialIndex(modelID) {
   };
 
   notifyFlutter('onBimProjectSpecsLoaded', state.bimProjectSpecs);
+
+  // Pré-indexa em segundo plano (em fatias não-bloqueantes) todas as relações de Psets e Materiais O(1)
+  setTimeout(() => {
+    if (state.currentModel && state.currentModel.modelID === modelID) {
+      ensureRelationIndexes(modelID).catch(() => {});
+    }
+  }, 80);
 }
 
 /**
@@ -562,6 +820,7 @@ function buildGltfFallbackSpecs(modelGroup) {
       const id = child.userData.expressID || child.id;
       elementIds.push(id);
       const cat = deduceBimCategory(child);
+      state.elementCategoryMap.set(id, String(cat).toUpperCase());
       catSummary[cat] = (catSummary[cat] || 0) + 1;
       const box = new THREE.Box3().setFromObject(child);
       if (!box.isEmpty()) {
@@ -617,11 +876,22 @@ function buildGltfFallbackSpecs(modelGroup) {
 }
 
 /**
- * Extrai especificações completas do elemento IFC (incluindo Tipo, Quantitativos Qto, Materiais,
- * Geometria Real e Contagem de Peças por Nível) seguindo boas práticas openBIM.
+ * Extrai especificações completas do elemento IFC (incluindo Psets, Quantitativos Qto, Tipo, Materiais,
+ * Geometria Real e Contagem de Peças por Nível) em tempo O(1) indexado e com cache de instância/tipo.
  */
 async function enrichIfcElementPayload(modelID, targetID, baseName, baseCategory, psetsFormatted, idsToHighlight, isComposite) {
+  const cachedPayload = state.enrichedPayloadCache.get(targetID);
+  if (cachedPayload) {
+    return {
+      ...cachedPayload,
+      subIds: idsToHighlight,
+      isComposite: Boolean(isComposite),
+    };
+  }
+
   const mgr = state.ifcLoader?.ifcManager;
+  let resolvedName = baseName || `Elemento BIM #${targetID}`;
+  let resolvedCategory = baseCategory || 'IfcBuildingElement';
   let globalId = '';
   let tag = '';
   let predefinedType = '';
@@ -634,14 +904,26 @@ async function enrichIfcElementPayload(modelID, targetID, baseName, baseCategory
     try {
       const itemProps = await mgr.getItemProperties(modelID, targetID, false);
       if (itemProps) {
+        resolvedName = itemProps.Name?.value || itemProps.ObjectType?.value || resolvedName;
+        try {
+          const fullType = mgr.getIfcType(modelID, targetID);
+          if (fullType) resolvedCategory = fullType;
+        } catch (e) {}
+
         globalId = decodeIfcStepText(itemProps.GlobalId?.value || '');
         tag = decodeIfcStepText(itemProps.Tag?.value || '');
         predefinedType = decodeIfcStepText(itemProps.PredefinedType?.value || '');
         objectType = decodeIfcStepText(itemProps.ObjectType?.value || '');
         description = decodeIfcStepText(itemProps.Description?.value || '');
 
-        const genGroup = psetsFormatted['Propriedades Gerais'] || {};
-        if (objectType && objectType !== baseName) genGroup['ObjectType'] = objectType;
+        const genGroup = psetsFormatted['Propriedades Gerais'] || {
+          'ExpressID': targetID,
+          'Nome': decodeIfcStepText(resolvedName),
+          'Categoria IFC': resolvedCategory,
+          'GlobalId': globalId || 'N/A',
+          'Tag': tag || 'N/A',
+        };
+        if (objectType && objectType !== decodeIfcStepText(resolvedName)) genGroup['ObjectType'] = objectType;
         if (predefinedType && predefinedType !== 'NOTDEFINED') genGroup['PredefinedType'] = predefinedType;
         if (description) genGroup['Description'] = description;
         if (itemProps.OverallHeight?.value !== undefined) {
@@ -656,90 +938,115 @@ async function enrichIfcElementPayload(modelID, targetID, baseName, baseCategory
       }
     } catch (e) {}
 
-    // 2. Extração de IfcElementQuantity (Quantities) que o loop simples de HasProperties não lê
+    // 2. Extração O(1) unificada de IfcPropertySet (HasProperties) e IfcElementQuantity (Quantities)
     try {
-      const psets = await mgr.getPropertySets(modelID, targetID, true);
+      const psets = await getElementPropertySetsFast(modelID, targetID);
       if (Array.isArray(psets)) {
         for (const pset of psets) {
-          const psetName = decodeIfcStepText(pset.Name?.value || 'Quantitativos BIM');
-          if (Array.isArray(pset.Quantities) && pset.Quantities.length > 0) {
-            const qGroup = psetsFormatted[psetName] || {};
-            for (const q of pset.Quantities) {
-              const qName = decodeIfcStepText(q.Name?.value || '');
-              const rawVal =
-                q.LengthValue?.value ??
-                q.AreaValue?.value ??
-                q.VolumeValue?.value ??
-                q.WeightValue?.value ??
-                q.CountValue?.value;
-              if (qName && rawVal !== undefined) {
-                let num = Number(rawVal);
-                // Comprimentos em IfcQuantityLength seguem a unidade linear do arquivo
-                if (q.LengthValue?.value !== undefined && isFinite(num)) {
-                  num = num * state.lengthUnitScale;
-                }
-                qGroup[qName] = isFinite(num) ? Number(num.toFixed(3)) : decodeIfcStepText(rawVal);
+          const psetName = decodeIfcStepText(pset.Name?.value || 'Outras Propriedades');
+          const group = psetsFormatted[psetName] ? { ...psetsFormatted[psetName] } : {};
+
+          if (Array.isArray(pset.HasProperties)) {
+            for (const prop of pset.HasProperties) {
+              const propName = decodeIfcStepText(prop?.Name?.value || '');
+              const propVal = prop?.NominalValue?.value;
+              if (propName && propVal !== undefined) {
+                group[propName] = typeof propVal === 'number'
+                  ? Number(propVal.toFixed(3))
+                  : decodeIfcStepText(propVal);
               }
             }
-            if (Object.keys(qGroup).length > 0) {
-              psetsFormatted[psetName] = qGroup;
+          }
+
+          if (Array.isArray(pset.Quantities) && pset.Quantities.length > 0) {
+            for (const q of pset.Quantities) {
+              const qName = decodeIfcStepText(q?.Name?.value || '');
+              const rawVal =
+                q?.LengthValue?.value ??
+                q?.AreaValue?.value ??
+                q?.VolumeValue?.value ??
+                q?.WeightValue?.value ??
+                q?.CountValue?.value;
+              if (qName && rawVal !== undefined) {
+                let num = Number(rawVal);
+                if (q?.LengthValue?.value !== undefined && isFinite(num)) {
+                  num = num * state.lengthUnitScale;
+                }
+                group[qName] = isFinite(num) ? Number(num.toFixed(3)) : decodeIfcStepText(rawVal);
+              }
             }
+          }
+
+          if (Object.keys(group).length > 0) {
+            psetsFormatted[psetName] = group;
           }
         }
       }
     } catch (e) {}
 
-    // 3. Propriedades do Tipo (IfcTypeObject / IFCRELDEFINESBYTYPE)
+    // 3. Propriedades do Tipo (IfcTypeObject / IFCRELDEFINESBYTYPE) com cache O(1) por typeId
     const typeInfo = state.elementToType.get(targetID);
     if (typeInfo && typeInfo.typeId) {
-      try {
-        const typeProps = await mgr.getItemProperties(modelID, typeInfo.typeId, true);
-        if (typeProps) {
-          const tGroup = {};
-          if (typeInfo.typeName) tGroup['TypeName'] = typeInfo.typeName;
-          if (typeInfo.typeIfcClass) tGroup['TypeClass'] = typeInfo.typeIfcClass;
-          if (typeProps.ApplicableOccurrence?.value) {
-            tGroup['ApplicableOccurrence'] = decodeIfcStepText(typeProps.ApplicableOccurrence.value);
-          }
-          if (typeProps.ElementType?.value) {
-            tGroup['ElementType'] = decodeIfcStepText(typeProps.ElementType.value);
-          }
-          if (typeProps.ConstructionType?.value) {
-            tGroup['ConstructionType'] = decodeIfcStepText(typeProps.ConstructionType.value);
-          }
-          if (typeProps.OperationType?.value && typeProps.OperationType.value !== 'NOTDEFINED') {
-            tGroup['OperationType'] = decodeIfcStepText(typeProps.OperationType.value);
-          }
+      let cachedTypeSpec = state.typePropsCache.get(typeInfo.typeId);
+      if (!cachedTypeSpec) {
+        try {
+          const typeProps = await mgr.getItemProperties(modelID, typeInfo.typeId, true);
+          if (typeProps) {
+            const tGroup = {};
+            const extraTypePsets = {};
+            if (typeInfo.typeName) tGroup['TypeName'] = typeInfo.typeName;
+            if (typeInfo.typeIfcClass) tGroup['TypeClass'] = typeInfo.typeIfcClass;
+            if (typeProps.ApplicableOccurrence?.value) {
+              tGroup['ApplicableOccurrence'] = decodeIfcStepText(typeProps.ApplicableOccurrence.value);
+            }
+            if (typeProps.ElementType?.value) {
+              tGroup['ElementType'] = decodeIfcStepText(typeProps.ElementType.value);
+            }
+            if (typeProps.ConstructionType?.value) {
+              tGroup['ConstructionType'] = decodeIfcStepText(typeProps.ConstructionType.value);
+            }
+            if (typeProps.OperationType?.value && typeProps.OperationType.value !== 'NOTDEFINED') {
+              tGroup['OperationType'] = decodeIfcStepText(typeProps.OperationType.value);
+            }
 
-          if (Array.isArray(typeProps.HasPropertySets)) {
-            for (const tpset of typeProps.HasPropertySets) {
-              const tpName = decodeIfcStepText(tpset?.Name?.value || '');
-              if (Array.isArray(tpset?.HasProperties)) {
-                const subGroup = tpName ? (psetsFormatted[tpName] || {}) : tGroup;
-                for (const p of tpset.HasProperties) {
-                  const k = decodeIfcStepText(p?.Name?.value || '');
-                  const v = p?.NominalValue?.value;
-                  if (k && v !== undefined && subGroup[k] === undefined) {
-                    subGroup[k] = typeof v === 'number' ? Number(v.toFixed(3)) : decodeIfcStepText(v);
+            if (Array.isArray(typeProps.HasPropertySets)) {
+              for (const tpset of typeProps.HasPropertySets) {
+                const tpName = decodeIfcStepText(tpset?.Name?.value || '');
+                if (Array.isArray(tpset?.HasProperties)) {
+                  const subGroup = tpName ? (extraTypePsets[tpName] || {}) : tGroup;
+                  for (const p of tpset.HasProperties) {
+                    const k = decodeIfcStepText(p?.Name?.value || '');
+                    const v = p?.NominalValue?.value;
+                    if (k && v !== undefined && subGroup[k] === undefined) {
+                      subGroup[k] = typeof v === 'number' ? Number(v.toFixed(3)) : decodeIfcStepText(v);
+                    }
                   }
-                }
-                if (tpName && Object.keys(subGroup).length > 0) {
-                  psetsFormatted[tpName] = subGroup;
+                  if (tpName && Object.keys(subGroup).length > 0) {
+                    extraTypePsets[tpName] = subGroup;
+                  }
                 }
               }
             }
-          }
 
-          if (Object.keys(tGroup).length > 0) {
-            psetsFormatted['Especificação de Tipo (openBIM)'] = tGroup;
+            cachedTypeSpec = { tGroup, extraTypePsets };
+            state.typePropsCache.set(typeInfo.typeId, cachedTypeSpec);
           }
+        } catch (e) {}
+      }
+
+      if (cachedTypeSpec) {
+        for (const [tpName, tpGroup] of Object.entries(cachedTypeSpec.extraTypePsets)) {
+          psetsFormatted[tpName] = { ...tpGroup, ...(psetsFormatted[tpName] || {}) };
         }
-      } catch (e) {}
+        if (Object.keys(cachedTypeSpec.tGroup).length > 0) {
+          psetsFormatted['Especificação de Tipo (openBIM)'] = { ...cachedTypeSpec.tGroup };
+        }
+      }
     }
 
-    // 4. Materiais e Camadas Construtivas (IFCRELASSOCIATESMATERIAL)
+    // 4. Materiais e Camadas Construtivas O(1) (IFCRELASSOCIATESMATERIAL)
     try {
-      const mats = await mgr.getMaterialsProperties(modelID, targetID, true);
+      const mats = await getElementMaterialsFast(modelID, targetID);
       if (Array.isArray(mats) && mats.length > 0) {
         const matGroup = {};
         let layerIdx = 1;
@@ -790,7 +1097,6 @@ async function enrichIfcElementPayload(modelID, targetID, baseName, baseCategory
   const geometricDimensions = {};
   if (!worldBox.isEmpty()) {
     const size = worldBox.getSize(new THREE.Vector3());
-    // Dimensões horizontais ordenadas (maior = comprimento, menor = largura/espessura) e vertical (Y = altura)
     const horizMax = Math.max(size.x, size.z);
     const horizMin = Math.min(size.x, size.z);
     geometricDimensions.length = Number(horizMax.toFixed(3));
@@ -808,13 +1114,21 @@ async function enrichIfcElementPayload(modelID, targetID, baseName, baseCategory
     };
   }
 
-  // 6. Análise Quantitativa de Peças Idênticas por Nível (Storey)
-  const analytics = await computePieceStoreyAnalytics(modelID, targetID, baseName, baseCategory);
+  if (Object.keys(psetsFormatted).length <= 1) {
+    psetsFormatted['Dados Técnicos'] = {
+      'Modelo': 'Projeto openBIM IFC',
+      'Geometria': 'Sólido WebAssembly',
+      'Status': 'Construído (As-Built)',
+    };
+  }
 
-  return {
+  // 6. Análise Quantitativa de Peças Idênticas por Nível (Storey) com cache instantâneo por Tipo
+  const analytics = await computePieceStoreyAnalytics(modelID, targetID, resolvedName, resolvedCategory);
+
+  const resultPayload = {
     expressID: targetID,
-    name: decodeIfcStepText(baseName),
-    category: baseCategory,
+    name: decodeIfcStepText(resolvedName),
+    category: resolvedCategory,
     globalId: globalId,
     tag: tag,
     predefinedType: predefinedType,
@@ -828,11 +1142,19 @@ async function enrichIfcElementPayload(modelID, targetID, baseName, baseCategory
     subIds: idsToHighlight,
     isComposite: Boolean(isComposite),
   };
+
+  if (state.enrichedPayloadCache.size >= 300) {
+    const oldestKey = state.enrichedPayloadCache.keys().next().value;
+    state.enrichedPayloadCache.delete(oldestKey);
+  }
+  state.enrichedPayloadCache.set(targetID, resultPayload);
+
+  return resultPayload;
 }
 
 /**
  * Calcula quantas unidades desta mesma peça/tipo existem no projeto inteiro e em cada pavimento (IfcBuildingStorey),
- * incluindo soma estimada de comprimento, área e volume por nível para tomada de decisão em obra.
+ * reutilizando em O(1) o cache analítico quando o usuário navega entre dezenas/centenas de peças do mesmo tipo.
  */
 async function computePieceStoreyAnalytics(modelID, targetID, rawName, category) {
   const mgr = state.ifcLoader?.ifcManager;
@@ -841,21 +1163,34 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
   const hostStoreyName = hostStoreyObj ? hostStoreyObj.name : null;
 
   const typeInfo = state.elementToType.get(targetID);
+  const hasTypeBucket = Boolean(typeInfo && state.typeToElements.has(typeInfo.typeKey));
+  const targetSig = hasTypeBucket ? null : normalizeFamilyTypeSignature(rawName, category);
+  const cacheKey = hasTypeBucket ? `TYPE::${typeInfo.typeKey}` : `SIG::${targetSig}`;
+
+  const cachedBase = state.pieceAnalyticsCache.get(cacheKey);
+  if (cachedBase) {
+    return {
+      ...cachedBase,
+      hostStoreyId: hostStoreyId,
+      hostStoreyName: hostStoreyName,
+    };
+  }
+
   let matchingIds = [];
   let cleanTypeName = decodeIfcStepText(rawName || '');
   let ifcTypeClass = typeInfo?.typeIfcClass || '';
 
-  if (typeInfo && state.typeToElements.has(typeInfo.typeKey)) {
+  if (hasTypeBucket) {
     cleanTypeName = typeInfo.typeName || cleanTypeName;
     matchingIds = Array.from(state.typeToElements.get(typeInfo.typeKey));
   } else {
     // Fallback por assinatura normalizada Família:Tipo + Categoria IFC
-    const targetSig = normalizeFamilyTypeSignature(rawName, category);
     const candidateIds = new Set([targetID]);
     for (const list of state.storeyToElements.values()) {
       for (const eid of list) candidateIds.add(eid);
     }
 
+    const expectedCatUpper = String(category || '').toUpperCase();
     for (const eid of candidateIds) {
       if (eid === targetID) {
         matchingIds.push(eid);
@@ -864,8 +1199,8 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
       let cached = state.elementMetaIndex.get(eid);
       if (!cached && mgr && modelID !== undefined) {
         try {
-          const eCat = mgr.getIfcType(modelID, eid) || '';
-          if (eCat.toUpperCase() !== String(category).toUpperCase()) {
+          const eCat = state.elementCategoryMap.get(eid) || (mgr.getIfcType(modelID, eid) || '').toUpperCase();
+          if (eCat.toUpperCase() !== expectedCatUpper) {
             state.elementMetaIndex.set(eid, { cat: eCat, sig: '' });
             continue;
           }
@@ -875,7 +1210,6 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
           state.elementMetaIndex.set(eid, cached);
         } catch (e) {}
       } else if (!cached && state.currentModel && state.currentModel.modelID === undefined) {
-        // GLTF fallback
         state.currentModel.traverse((child) => {
           if (child.isMesh && (child.userData.expressID === eid || child.id === eid)) {
             const eCat = deduceBimCategory(child);
@@ -906,7 +1240,7 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
     metricsByStorey[String(st.expressID)] = { lengthM: 0, areaM2: 0, volumeM3: 0 };
   }
 
-  // Contagem da mesma categoria IFC por pavimento
+  // Contagem instantânea da mesma categoria IFC por pavimento via mapa em memória (zero WASM GetIfcType repetido)
   let totalCategoryInProject = 0;
   const targetCatUpper = String(category || '').toUpperCase();
   for (const st of state.storeys) {
@@ -914,13 +1248,18 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
     const elems = state.storeyToElements.get(st.expressID) || [];
     let catCount = 0;
     for (const eid of elems) {
-      let eCat = '';
-      if (mgr && modelID !== undefined) {
-        try {
-          eCat = (mgr.getIfcType(modelID, eid) || '').toUpperCase();
-        } catch (e) {}
-      } else {
-        eCat = targetCatUpper;
+      let eCat = state.elementCategoryMap.get(eid);
+      if (eCat === undefined) {
+        if (mgr && modelID !== undefined) {
+          try {
+            eCat = String(mgr.getIfcType(modelID, eid) || '').toUpperCase();
+          } catch (e) {
+            eCat = '';
+          }
+        } else {
+          eCat = targetCatUpper;
+        }
+        state.elementCategoryMap.set(eid, eCat);
       }
       if (eCat === targetCatUpper) catCount++;
     }
@@ -941,9 +1280,7 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
     if (!box.isEmpty()) {
       const sz = box.getSize(new THREE.Vector3());
       const hMax = Math.max(sz.x, sz.z);
-      const hMin = Math.min(sz.x, sz.z);
       instLen = hMax;
-      // Para paredes/janelas/portas, área principal é elevação vertical (comprimento * altura); para lajes/pisos/telhados é projeção horizontal (x * z)
       if (targetCatUpper.includes('SLAB') || targetCatUpper.includes('ROOF') || targetCatUpper.includes('COVERING')) {
         instArea = sz.x * sz.z;
       } else {
@@ -971,11 +1308,9 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
     }
   }
 
-  return {
+  const baseAnalytics = {
     typeName: cleanTypeName,
     ifcTypeClass: ifcTypeClass,
-    hostStoreyId: hostStoreyId,
-    hostStoreyName: hostStoreyName,
     totalInProject: matchingIds.length,
     totalCategoryInProject: Math.max(totalCategoryInProject, matchingIds.length),
     allInstanceIds: matchingIds,
@@ -989,6 +1324,14 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
     },
     metricsByStorey: metricsByStorey,
   };
+
+  state.pieceAnalyticsCache.set(cacheKey, baseAnalytics);
+
+  return {
+    ...baseAnalytics,
+    hostStoreyId: hostStoreyId,
+    hostStoreyName: hostStoreyName,
+  };
 }
 
 /**
@@ -998,7 +1341,6 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
 function focusElementForDynamicView(expressID, durationMs = 460) {
   if (!state.camera || !state.controls) return;
 
-  // Atualiza tamanho do renderer caso o container tenha mudado (ex: rotação horizontal / divisória)
   onWindowResize();
 
   const id = Number(expressID ?? state.selectedObject?.expressID);
@@ -1011,21 +1353,17 @@ function focusElementForDynamicView(expressID, durationMs = 460) {
   const elemSize = elemBox.getSize(new THREE.Vector3());
   const maxElemDim = Math.max(elemSize.x, elemSize.y, elemSize.z, 0.6);
 
-  // Calcula distância ideal considerando FOV vertical E horizontal (aspect ratio do painel esquerdo)
   const vFovRad = THREE.MathUtils.degToRad(state.camera.fov || 45);
   const aspect = Math.max(0.35, state.camera.aspect || (window.innerWidth / Math.max(1, window.innerHeight)));
   const hFovRad = 2 * Math.atan(Math.tan(vFovRad / 2) * aspect);
   const limitingFov = Math.min(vFovRad, hFovRad);
 
-  // Multiplicador 1.75x mostra o elemento em destaque mantendo o contexto imediato dele na obra
   let dist = (maxElemDim / (2 * Math.tan(limitingFov / 2))) * 1.75;
   dist = Math.max(2.1, Math.min(dist, 120));
 
-  // Ajusta near plane dinamicamente para não cortar elementos pequenos em close-up
   state.camera.near = Math.max(0.05, Math.min(0.4, dist * 0.04));
   state.camera.updateProjectionMatrix();
 
-  // Escolhe direção de observação arquitetônica de fora da obra olhando para a peça (evita ficar atrás de paredes externas)
   const modelCenter = getRootPivotTarget();
   const outwardHoriz = new THREE.Vector3(
     elemCenter.x - modelCenter.x,
@@ -1034,11 +1372,9 @@ function focusElementForDynamicView(expressID, durationMs = 460) {
   );
 
   if (outwardHoriz.lengthSq() < 0.04) {
-    // Se o elemento estiver bem no centro da obra, usa ângulo isométrico clássico
     outwardHoriz.set(0.72, 0, 0.69);
   } else {
     outwardHoriz.normalize();
-    // Leve rotação azimutal (~24°) para visão 3/4 tridimensional (nunca chapada 90°)
     const angle = 0.42;
     const cosA = Math.cos(angle);
     const sinA = Math.sin(angle);
@@ -1049,7 +1385,7 @@ function focusElementForDynamicView(expressID, durationMs = 460) {
 
   const viewDir = new THREE.Vector3(
     outwardHoriz.x * 0.86,
-    0.50, // Elevação suave de 30° olhando levemente de cima para a peça na obra
+    0.50,
     outwardHoriz.z * 0.86
   ).normalize();
 
@@ -1059,146 +1395,177 @@ function focusElementForDynamicView(expressID, durationMs = 460) {
   state.activePivotElementId = id;
   animateCameraTo(targetCamPos, elemCenter, durationMs);
 
-  // Re-sincroniza após o término da rotação da tela para landscape no Android/iOS (~300ms)
-  setTimeout(() => {
+  if (_dynamicResizeTimer) clearTimeout(_dynamicResizeTimer);
+  _dynamicResizeTimer = setTimeout(() => {
+    _dynamicResizeTimer = null;
     if (!state.camera || !state.controls) return;
     onWindowResize();
   }, 320);
 }
 
 /**
- * Seleciona programaticamente uma peça pelo seu ExpressID (ex: navegar entre as instâncias do mesmo nível)
- * e posiciona a câmera nela na obra.
+ * Seleciona programaticamente uma peça pelo seu ExpressID (ex: navegar entre 146 pilares no mesmo nível)
+ * de forma estritamente serializada: bloqueia novas chamadas até concluir leitura O(1) e renderização do frame WebGL.
  */
 async function selectElementByExpressId(expressID, focusCamera = true) {
   const id = Number(expressID);
-  if (isNaN(id) || !state.currentModel) return;
+  if (isNaN(id) || !state.currentModel) return false;
 
-  // Caso modelo IFC
-  if (state.ifcLoader && state.currentModel.modelID !== undefined) {
-    const modelID = state.currentModel.modelID;
-    const mgr = state.ifcLoader.ifcManager;
-
-    clearSelection(false);
-
-    const aggregate = state.parentToChildren.get(id) || state.childToParent.get(id);
-    const targetID = aggregate ? aggregate.parentId : id;
-    const idsToHighlight = aggregate ? aggregate.children : [targetID];
-
-    try {
-      mgr.createSubset({
-        modelID: modelID,
-        ids: idsToHighlight,
-        scene: state.scene,
-        removePrevious: true,
-        material: state.highlightMaterial,
-      });
-    } catch (e) {}
-
-    state.selectedObject = {
-      modelID: modelID,
-      expressID: targetID,
-      subIds: idsToHighlight,
-      isComposite: Boolean(aggregate),
-      isIfc: true,
-    };
-
-    let name = `Elemento BIM #${targetID}`;
-    let category = aggregate ? aggregate.type : 'IfcBuildingElement';
-    const psetsFormatted = {};
-
-    try {
-      const itemProps = await mgr.getItemProperties(modelID, targetID, false);
-      if (itemProps) {
-        name = itemProps.Name?.value || itemProps.ObjectType?.value || name;
-        const fullType = mgr.getIfcType(modelID, targetID);
-        if (fullType) category = fullType;
-
-        psetsFormatted['Propriedades Gerais'] = {
-          'ExpressID': targetID,
-          'Nome': decodeIfcStepText(name),
-          'Categoria IFC': category,
-          'GlobalId': itemProps.GlobalId?.value || 'N/A',
-          'Tag': itemProps.Tag?.value || 'N/A',
-        };
-      }
-    } catch (e) {}
-
-    try {
-      const psets = await mgr.getPropertySets(modelID, targetID, true);
-      if (Array.isArray(psets)) {
-        for (const pset of psets) {
-          const psetName = decodeIfcStepText(pset.Name?.value || 'Outras Propriedades');
-          const group = {};
-          if (Array.isArray(pset.HasProperties)) {
-            for (const prop of pset.HasProperties) {
-              const propName = decodeIfcStepText(prop.Name?.value || '');
-              const propVal = prop.NominalValue?.value;
-              if (propName && propVal !== undefined) {
-                group[propName] = typeof propVal === 'number' ? Number(propVal.toFixed(2)) : decodeIfcStepText(propVal);
-              }
-            }
-          }
-          if (Object.keys(group).length > 0) {
-            psetsFormatted[psetName] = group;
-          }
-        }
-      }
-    } catch (e) {}
-
-    const payload = await enrichIfcElementPayload(
-      modelID,
-      targetID,
-      name,
-      category,
-      psetsFormatted,
-      idsToHighlight,
-      Boolean(aggregate)
-    );
-
-    // Reaplica destaque de peças similares caso estivesse ativo
-    if (state.similarHighlightedIds && state.similarHighlightedIds.length > 0) {
-      highlightSimilarElements(state.similarHighlightedIds, targetID);
-    }
-    if (state.isDynamicXrayActive) {
-      const keep = state.similarHighlightedIds.length > 0 ? state.similarHighlightedIds : [targetID];
-      setDynamicXrayContext(true, keep);
-    }
-
-    if (focusCamera) {
-      focusElementForDynamicView(targetID, 420);
-    }
-
-    notifyFlutter('onElementSelected', payload);
-    return;
+  if (state.isTransitioningElement) {
+    notifyFlutter('onElementTransitionBusy', { expressID: id });
+    return false;
   }
 
-  // Fallback GLTF
-  let targetMesh = null;
-  state.currentModel.traverse((child) => {
-    if (child.isMesh && (child.userData.expressID === id || child.id === id)) {
-      targetMesh = child;
+  state.isTransitioningElement = true;
+  try {
+    // Caso modelo IFC
+    if (state.ifcLoader && state.currentModel.modelID !== undefined) {
+      const modelID = state.currentModel.modelID;
+      const mgr = state.ifcLoader.ifcManager;
+
+      if (state.selectedObject && !state.selectedObject.isIfc) {
+        clearSelection(false, false);
+      }
+
+      const aggregate = state.parentToChildren.get(id) || state.childToParent.get(id);
+      const targetID = aggregate ? aggregate.parentId : id;
+      const idsToHighlight = aggregate ? aggregate.children : [targetID];
+
+      // Atualiza o subset principal in-place sem disparar onElementDeselected nem recriar BufferGeometry
+      try {
+        const subset = mgr.createSubset({
+          modelID: modelID,
+          ids: idsToHighlight,
+          scene: state.scene,
+          removePrevious: true,
+          material: state.highlightMaterial,
+        });
+        if (subset) subset.renderOrder = 2;
+      } catch (e) {}
+
+      state.selectedObject = {
+        modelID: modelID,
+        expressID: targetID,
+        subIds: idsToHighlight,
+        isComposite: Boolean(aggregate),
+        isIfc: true,
+      };
+
+      const psetsFormatted = {};
+      if (aggregate) {
+        psetsFormatted['Composição do Elemento'] = {
+          'Estrutura': 'Elemento Composto (Hierarquia Revit)',
+          'Total de Partes': `${aggregate.children.length} peças agregadas`,
+          'IDs dos Componentes': aggregate.children.join(', '),
+        };
+      }
+
+      const payload = await enrichIfcElementPayload(
+        modelID,
+        targetID,
+        `Elemento BIM #${targetID}`,
+        aggregate ? aggregate.type : 'IfcBuildingElement',
+        psetsFormatted,
+        idsToHighlight,
+        Boolean(aggregate)
+      );
+
+      // Reaplica destaque de peças similares apenas quando ativo
+      if (state.similarHighlightedIds && state.similarHighlightedIds.length > 0) {
+        highlightSimilarElements(state.similarHighlightedIds, targetID);
+      }
+      if (state.isDynamicXrayActive) {
+        const keep = state.similarHighlightedIds.length > 0 ? state.similarHighlightedIds : [targetID];
+        setDynamicXrayContext(true, keep);
+      }
+
+      if (focusCamera) {
+        focusElementForDynamicView(targetID, 320);
+      }
+
+      // Aguarda o frame WebGL ser efetivamente desenhado na GPU antes de destravar nova transição
+      await waitForNextRenderedFrame();
+
+      notifyFlutter('onElementSelected', {
+        ...payload,
+        alreadyFocusedInJs: Boolean(focusCamera),
+      });
+      return true;
     }
-  });
-  if (targetMesh) {
-    await selectElement({ object: targetMesh });
-    if (focusCamera) focusElementForDynamicView(id, 420);
+
+    // Fallback GLTF
+    let targetMesh = null;
+    state.currentModel.traverse((child) => {
+      if (child.isMesh && (child.userData.expressID === id || child.id === id)) {
+        targetMesh = child;
+      }
+    });
+    if (targetMesh) {
+      clearSelection(false, false);
+      state.selectedObject = targetMesh;
+      state.originalMaterial = targetMesh.material;
+      targetMesh.material = state.highlightMaterial;
+
+      const elementName = targetMesh.name || `Elemento BIM #${id}`;
+      const category = targetMesh.userData.category || deduceBimCategory(targetMesh);
+      const gltfAnalytics = await computePieceStoreyAnalytics(undefined, id, elementName, category);
+      const box = getElementWorldBox(id);
+      const gltfDims = {};
+      if (!box.isEmpty()) {
+        const sz = box.getSize(new THREE.Vector3());
+        gltfDims.length = Number(Math.max(sz.x, sz.z).toFixed(3));
+        gltfDims.width = Number(Math.min(sz.x, sz.z).toFixed(3));
+        gltfDims.height = Number(sz.y.toFixed(3));
+        gltfDims.minElevation = Number(box.min.y.toFixed(3));
+        gltfDims.maxElevation = Number(box.max.y.toFixed(3));
+      }
+
+      if (focusCamera) {
+        focusElementForDynamicView(id, 320);
+      }
+      await waitForNextRenderedFrame();
+
+      notifyFlutter('onElementSelected', {
+        expressID: id,
+        name: elementName,
+        category: category,
+        psets: targetMesh.userData.psets || {
+          'Propriedades Gerais': {
+            'ExpressID': id,
+            'Nome': elementName,
+            'Categoria IFC': category,
+            'Status': 'Construído (As-Built)',
+          },
+        },
+        geometricDimensions: gltfDims,
+        analytics: gltfAnalytics,
+        alreadyFocusedInJs: Boolean(focusCamera),
+      });
+      return true;
+    }
+    return false;
+  } finally {
+    state.isTransitioningElement = false;
   }
 }
 
 /**
  * Destaca em Verde Esmeralda (#10B981) todas as peças similares do nível selecionado no 3D,
- * mantendo a peça ativa principal em Azul Royal (#2563EB).
+ * atualizando o subset in-place e evitando reconstrução redundante caso a assinatura seja idêntica.
  */
 function highlightSimilarElements(idsList, activeExpressID) {
-  clearSimilarHighlights(false);
   if (!Array.isArray(idsList) || idsList.length === 0 || !state.currentModel) {
-    state.similarHighlightedIds = [];
+    clearSimilarHighlights(true);
     return;
   }
 
   state.similarHighlightedIds = idsList.map(Number).filter((n) => !isNaN(n));
   const activeId = Number(activeExpressID ?? state.selectedObject?.expressID);
+  const nextSignature = `${activeId}::${state.similarHighlightedIds.join(',')}`;
+
+  if (state.similarSubsetSignature === nextSignature) {
+    return;
+  }
 
   const siblingGeometryIds = [];
   for (const rawId of state.similarHighlightedIds) {
@@ -1211,11 +1578,14 @@ function highlightSimilarElements(idsList, activeExpressID) {
     }
   }
 
-  if (siblingGeometryIds.length === 0) return;
+  if (siblingGeometryIds.length === 0) {
+    clearSimilarHighlights(false);
+    return;
+  }
 
   if (state.ifcLoader && state.currentModel.modelID !== undefined && state.secondaryHighlightMaterial) {
     try {
-      state.ifcLoader.ifcManager.createSubset({
+      const subset = state.ifcLoader.ifcManager.createSubset({
         modelID: state.currentModel.modelID,
         ids: siblingGeometryIds,
         scene: state.scene,
@@ -1223,6 +1593,8 @@ function highlightSimilarElements(idsList, activeExpressID) {
         material: state.secondaryHighlightMaterial,
         customID: 'SIMILAR_PIECES_SUBSET',
       });
+      if (subset) subset.renderOrder = 1;
+      state.similarSubsetSignature = nextSignature;
     } catch (e) {
       console.warn('Falha ao criar subset de peças similares:', e);
     }
@@ -1230,12 +1602,14 @@ function highlightSimilarElements(idsList, activeExpressID) {
 }
 
 /**
- * Remove o destaque secundário de peças similares da cena 3D.
+ * Remove o destaque secundário de peças similares da cena 3D com segurança de atributos WebGL.
  */
 function clearSimilarHighlights(resetList = true) {
   if (resetList) {
     state.similarHighlightedIds = [];
   }
+  state.similarSubsetSignature = '';
+
   if (state.ifcLoader && state.currentModel?.modelID !== undefined && state.secondaryHighlightMaterial) {
     try {
       state.ifcLoader.ifcManager.removeSubset(
@@ -1252,25 +1626,131 @@ function clearSimilarHighlights(resetList = true) {
   if (state.scene && state.secondaryHighlightMaterial) {
     const toRemove = [];
     state.scene.traverse((child) => {
-      if (child.isMesh && child.material === state.secondaryHighlightMaterial) {
+      if (child.isMesh && child !== state.currentModel && child.material === state.secondaryHighlightMaterial) {
         toRemove.push(child);
       }
     });
     for (const m of toRemove) {
       if (m.parent) m.parent.remove(m);
-      if (m.geometry) m.geometry.dispose();
+      if (m.geometry) {
+        m.geometry.attributes = {};
+        m.geometry.index = null;
+        m.geometry.dispose();
+      }
+    }
+  }
+}
+
+/**
+ * Entra no modo de Visualização Dinâmica salvando o estado exato da câmera, frustum e isolamento anteriores
+ * para restauração fiel quando o usuário sair do modo dinâmico.
+ */
+function enterDynamicViewMode(expressID) {
+  state.isDynamicViewActive = true;
+  if (state.camera && state.controls && !state.preDynamicViewSnapshot) {
+    state.preDynamicViewSnapshot = {
+      cameraPos: state.camera.position.clone(),
+      controlsTarget: state.controls.target.clone(),
+      cameraNear: state.camera.near,
+      cameraFar: state.camera.far,
+      isElementPivotActive: state.isElementPivotActive,
+      activePivotElementId: state.activePivotElementId,
+      selectedExpressId: state.selectedObject?.expressID ?? Number(expressID),
+      isolatedElementId: state.isolatedElementId,
+      isolatedElementIds: new Set(state.isolatedElementIds || []),
+    };
+  }
+  focusElementForDynamicView(expressID, 460);
+}
+
+/**
+ * Sai do modo de Visualização Dinâmica restaurando exatamente a câmera, o near/far plane,
+ * o isolamento anterior, os materiais originais (sem Raio-X) e removendo destaques secundários.
+ */
+function exitDynamicViewMode() {
+  state.isDynamicViewActive = false;
+  clearSimilarHighlights(true);
+  setDynamicXrayContext(false, []);
+
+  const snap = state.preDynamicViewSnapshot;
+  state.preDynamicViewSnapshot = null;
+
+  onWindowResize();
+
+  if (snap) {
+    // 1. Se o usuário navegou entre outras instâncias durante a vista dinâmica, restaura o destaque na peça original
+    if (snap.selectedExpressId !== undefined &&
+        state.selectedObject &&
+        state.selectedObject.expressID !== snap.selectedExpressId) {
+      if (state.ifcLoader && state.currentModel?.modelID !== undefined) {
+        const modelID = state.currentModel.modelID;
+        const agg = state.parentToChildren.get(snap.selectedExpressId) || state.childToParent.get(snap.selectedExpressId);
+        const targetID = agg ? agg.parentId : snap.selectedExpressId;
+        const idsToHighlight = agg ? agg.children : [targetID];
+        try {
+          const subset = state.ifcLoader.ifcManager.createSubset({
+            modelID: modelID,
+            ids: idsToHighlight,
+            scene: state.scene,
+            removePrevious: true,
+            material: state.highlightMaterial,
+          });
+          if (subset) subset.renderOrder = 2;
+          state.selectedObject = {
+            modelID: modelID,
+            expressID: targetID,
+            subIds: idsToHighlight,
+            isComposite: Boolean(agg),
+            isIfc: true,
+          };
+        } catch (e) {}
+      } else {
+        selectElementByExpressId(snap.selectedExpressId, false);
+      }
+    }
+
+    // 2. Restaura estado de isolamento caso tenha sido alterado dentro da Visualização Dinâmica
+    const isolationChanged =
+      state.isolatedElementId !== snap.isolatedElementId ||
+      (state.isolatedElementIds?.size ?? 0) !== snap.isolatedElementIds.size;
+
+    if (isolationChanged) {
+      state.isolatedElementId = snap.isolatedElementId;
+      state.isolatedElementIds = new Set(snap.isolatedElementIds);
+      if (typeof updateModelVisibility === 'function') {
+        updateModelVisibility();
+      }
+    }
+
+    // 3. Restaura frustum (near/far), pivô e anima a câmera de volta para a posição exata anterior
+    if (state.camera && state.controls) {
+      state.camera.near = snap.cameraNear;
+      state.camera.far = snap.cameraFar;
+      state.camera.updateProjectionMatrix();
+
+      state.isElementPivotActive = snap.isElementPivotActive;
+      state.activePivotElementId = snap.activePivotElementId;
+      animateCameraTo(snap.cameraPos, snap.controlsTarget, 360);
+
+      if (_dynamicResizeTimer) clearTimeout(_dynamicResizeTimer);
+      _dynamicResizeTimer = setTimeout(() => {
+        _dynamicResizeTimer = null;
+        onWindowResize();
+      }, 320);
     }
   }
 }
 
 /**
  * Ativa/Desativa o modo Contexto Raio-X na obra: torna o restante do edifício translúcido (14% opacidade)
- * para enxergar claramente onde a peça (e suas irmãs do pavimento) estão posicionadas por dentro da obra!
+ * suportando tanto malha única consolidada (.IFC) quanto grupos de malhas (.GLB/.GLTF).
  */
 function setDynamicXrayContext(enabled, keepExpressIds = []) {
   if (!state.currentModel) return;
   state.isDynamicXrayActive = Boolean(enabled);
   state.dynamicXrayKeepIds.clear();
+
+  const isIfcConsolidatedMesh = Boolean(state.ifcLoader && state.currentModel.modelID !== undefined);
 
   if (state.isDynamicXrayActive) {
     const baseIds = Array.isArray(keepExpressIds) && keepExpressIds.length > 0
@@ -1287,20 +1767,45 @@ function setDynamicXrayContext(enabled, keepExpressIds = []) {
       }
     }
 
-    if (!state.currentModel.userData.savedMaterialsBeforeXray) {
-      state.currentModel.userData.savedMaterialsBeforeXray = state.currentModel.material;
+    if (isIfcConsolidatedMesh) {
+      if (!state.currentModel.userData.savedMaterialsBeforeXray) {
+        state.currentModel.userData.savedMaterialsBeforeXray = state.currentModel.material;
+      }
+      state.currentModel.material = state.xrayContextMaterial;
+    } else {
+      state.currentModel.traverse((child) => {
+        if (child.isMesh) {
+          const cid = child.userData.expressID || child.id;
+          if (!state.dynamicXrayKeepIds.has(cid)) {
+            if (!child.userData.savedMatBeforeXray) {
+              child.userData.savedMatBeforeXray = child.material;
+            }
+            child.material = state.xrayContextMaterial;
+          }
+        }
+      });
     }
-    state.currentModel.material = state.xrayContextMaterial;
   } else {
-    if (state.currentModel.userData.savedMaterialsBeforeXray) {
-      state.currentModel.material = state.currentModel.userData.savedMaterialsBeforeXray;
-      delete state.currentModel.userData.savedMaterialsBeforeXray;
+    if (isIfcConsolidatedMesh) {
+      if (state.currentModel.userData.savedMaterialsBeforeXray) {
+        state.currentModel.material = state.currentModel.userData.savedMaterialsBeforeXray;
+        delete state.currentModel.userData.savedMaterialsBeforeXray;
+      }
+    } else {
+      state.currentModel.traverse((child) => {
+        if (child.isMesh && child.userData.savedMatBeforeXray) {
+          child.material = child.userData.savedMatBeforeXray;
+          delete child.userData.savedMatBeforeXray;
+        }
+      });
     }
   }
 }
 
 // Exportações Globais para JS Bridge e Módulos
 window.BimEngine.decodeIfcStepText = decodeIfcStepText;
+window.BimEngine.waitForNextRenderedFrame = waitForNextRenderedFrame;
+window.BimEngine.ensureRelationIndexes = ensureRelationIndexes;
 window.BimEngine.resetBimAnalyticsState = resetBimAnalyticsState;
 window.BimEngine.recordElementInstanceBounds = recordElementInstanceBounds;
 window.BimEngine.getElementWorldBox = getElementWorldBox;
@@ -1309,12 +1814,16 @@ window.BimEngine.buildGltfFallbackSpecs = buildGltfFallbackSpecs;
 window.BimEngine.enrichIfcElementPayload = enrichIfcElementPayload;
 window.BimEngine.computePieceStoreyAnalytics = computePieceStoreyAnalytics;
 window.BimEngine.focusElementForDynamicView = focusElementForDynamicView;
+window.BimEngine.enterDynamicViewMode = enterDynamicViewMode;
+window.BimEngine.exitDynamicViewMode = exitDynamicViewMode;
 window.BimEngine.selectElementByExpressId = selectElementByExpressId;
 window.BimEngine.highlightSimilarElements = highlightSimilarElements;
 window.BimEngine.clearSimilarHighlights = clearSimilarHighlights;
 window.BimEngine.setDynamicXrayContext = setDynamicXrayContext;
 
 window.decodeIfcStepText = decodeIfcStepText;
+window.waitForNextRenderedFrame = waitForNextRenderedFrame;
+window.ensureRelationIndexes = ensureRelationIndexes;
 window.resetBimAnalyticsState = resetBimAnalyticsState;
 window.recordElementInstanceBounds = recordElementInstanceBounds;
 window.getElementWorldBox = getElementWorldBox;
@@ -1323,6 +1832,8 @@ window.buildGltfFallbackSpecs = buildGltfFallbackSpecs;
 window.enrichIfcElementPayload = enrichIfcElementPayload;
 window.computePieceStoreyAnalytics = computePieceStoreyAnalytics;
 window.focusElementForDynamicView = focusElementForDynamicView;
+window.enterDynamicViewMode = enterDynamicViewMode;
+window.exitDynamicViewMode = exitDynamicViewMode;
 window.selectElementByExpressId = selectElementByExpressId;
 window.highlightSimilarElements = highlightSimilarElements;
 window.clearSimilarHighlights = clearSimilarHighlights;

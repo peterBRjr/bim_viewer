@@ -24,8 +24,14 @@ function initEngine() {
   // 3. Inicializa parser IFC com WebAssembly
   initIfcEngine();
 
-  // 4. Registra ouvintes de redimensionamento, bloqueio de gestos nativos do WebKit e toque/clique
+  // 4. Registra ouvintes de redimensionamento (incluindo ResizeObserver para divisória e rotação), bloqueio de gestos e toque
   window.addEventListener('resize', onWindowResize);
+  if (typeof ResizeObserver !== 'undefined') {
+    const resizeObserver = new ResizeObserver(() => {
+      onWindowResize();
+    });
+    resizeObserver.observe(container);
+  }
   const domEl = state.renderer.domElement;
   domEl.addEventListener('pointerdown', onPointerDown);
   domEl.addEventListener('pointerup', onPointerUp);
@@ -51,9 +57,13 @@ function initEngine() {
  */
 function onWindowResize() {
   if (!state.camera || !state.renderer) return;
-  state.camera.aspect = window.innerWidth / window.innerHeight;
+  const container = document.getElementById('viewer-container');
+  const w = (container && container.clientWidth > 0) ? container.clientWidth : window.innerWidth;
+  const h = (container && container.clientHeight > 0) ? container.clientHeight : window.innerHeight;
+  if (w <= 0 || h <= 0) return;
+  state.camera.aspect = w / h;
   state.camera.updateProjectionMatrix();
-  state.renderer.setSize(window.innerWidth, window.innerHeight);
+  state.renderer.setSize(w, h);
 }
 
 /**
@@ -160,11 +170,14 @@ async function onPointerUp(event) {
     return;
   }
 
+  // Bloqueia cliques concorrentes enquanto uma peça ainda está carregando e renderizando
+  if (state.isTransitioningElement) return;
+
   if (intersects.length > 0) {
     const hit = intersects[0];
     await selectElement(hit);
-  } else {
-    // Clique no fundo vazio: desseleciona o elemento e remove o destaque azul
+  } else if (!state.isDynamicViewActive) {
+    // Clique no fundo vazio (apenas fora da Visualização Dinâmica): desseleciona o elemento
     clearSelection();
   }
 }

@@ -20,6 +20,7 @@ class BimElementMetadata {
   final List<String> materials;
   final Map<String, double> geometricDimensions;
   final BimPieceAnalytics? analytics;
+  final bool alreadyFocusedInJs;
 
   const BimElementMetadata({
     required this.expressID,
@@ -37,6 +38,7 @@ class BimElementMetadata {
     this.materials = const [],
     this.geometricDimensions = const {},
     this.analytics,
+    this.alreadyFocusedInJs = false,
   });
 
   factory BimElementMetadata.fromMap(Map<String, dynamic> map) {
@@ -79,6 +81,7 @@ class BimElementMetadata {
       materials: matsRaw,
       geometricDimensions: parsedDims,
       analytics: parsedAnalytics,
+      alreadyFocusedInJs: map['alreadyFocusedInJs'] == true,
     );
   }
 

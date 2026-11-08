@@ -94,238 +94,240 @@ function deduceBimCategory(mesh) {
 
 /**
  * Aplica destaque visual e extrai metadados do elemento selecionado (IFC ou GLTF)
+ * com bloqueio mútuo para impedir leituras WASM e subsets concorrentes.
  */
 async function selectElement(hit) {
-  clearSelection(false);
-
-  const object = hit.object;
+  if (state.isTransitioningElement) return;
+  const object = hit?.object;
   if (!object) return;
 
-  // 1. Caso o modelo seja IFC nativo (possua modelID e expressID)
-  if (state.ifcLoader && object.modelID !== undefined && hit.faceIndex !== undefined) {
-    try {
-      const expressID = state.ifcLoader.ifcManager.getExpressId(object.geometry, hit.faceIndex);
-      if (expressID !== undefined && expressID !== null && expressID >= 0) {
-        // Verifica se o elemento clicado pertence a uma agregação pai (Padrão Revit: IfcRoof -> IfcSlab)
-        const aggregate = state.childToParent.get(expressID);
-        const targetID = aggregate ? aggregate.parentId : expressID;
-        const idsToHighlight = aggregate ? aggregate.children : [expressID];
+  state.isTransitioningElement = true;
+  try {
+    // 1. Caso o modelo seja IFC nativo (possua modelID e expressID)
+    if (state.ifcLoader && object.modelID !== undefined && hit.faceIndex !== undefined) {
+      try {
+        const expressID = state.ifcLoader.ifcManager.getExpressId(object.geometry, hit.faceIndex);
+        if (expressID !== undefined && expressID !== null && expressID >= 0) {
+          // Se a seleção anterior era uma malha avulsa GLTF, limpa apenas o material dela sem emitir deseleção
+          if (state.selectedObject && !state.selectedObject.isIfc) {
+            clearSelection(false, false);
+          }
 
-        // Aplica destaque em todas as geometrias do elemento composto
-        const subset = state.ifcLoader.ifcManager.createSubset({
-          modelID: object.modelID,
-          ids: idsToHighlight,
-          scene: state.scene,
-          removePrevious: true,
-          material: state.highlightMaterial
-        });
+          // Verifica se o elemento clicado pertence a uma agregação pai (Padrão Revit: IfcRoof -> IfcSlab)
+          const aggregate = state.childToParent.get(expressID);
+          const targetID = aggregate ? aggregate.parentId : expressID;
+          const idsToHighlight = aggregate ? aggregate.children : [expressID];
 
-        // Configura o eixo de navegação com os dedos baseado no elemento selecionado
-        let pivotPoint = null;
-        try {
-          if (subset && subset.geometry) {
-            subset.geometry.computeBoundingBox();
-            if (subset.geometry.boundingBox && !subset.geometry.boundingBox.isEmpty()) {
-              pivotPoint = subset.geometry.boundingBox.getCenter(new THREE.Vector3());
-              if (subset.matrixWorld) {
-                pivotPoint.applyMatrix4(subset.matrixWorld);
-              }
+          // Aplica destaque em todas as geometrias do elemento composto (atualiza subset in-place)
+          const subset = state.ifcLoader.ifcManager.createSubset({
+            modelID: object.modelID,
+            ids: idsToHighlight,
+            scene: state.scene,
+            removePrevious: true,
+            material: state.highlightMaterial
+          });
+          if (subset) subset.renderOrder = 2;
+
+          // Configura o eixo de navegação com os dedos baseado no elemento selecionado
+          let pivotPoint = null;
+          if (typeof getElementWorldBox === 'function') {
+            const wBox = getElementWorldBox(targetID);
+            if (!wBox.isEmpty()) {
+              pivotPoint = wBox.getCenter(new THREE.Vector3());
             }
           }
-        } catch (e) {
-          console.warn('Erro ao calcular centro geométrico do elemento IFC:', e);
-        }
-
-        if (!pivotPoint && hit.point) {
-          pivotPoint = hit.point.clone();
-        }
-
-        if (pivotPoint) {
-          setElementPivot(pivotPoint, targetID);
-        }
-
-        state.selectedObject = {
-          modelID: object.modelID,
-          expressID: targetID,
-          subIds: idsToHighlight,
-          isComposite: Boolean(aggregate),
-          isIfc: true
-        };
-
-        // Extrai propriedades reais do elemento alvo (Elemento Pai no caso de agregação)
-        let name = `Elemento BIM #${targetID}`;
-        let category = aggregate ? aggregate.type : 'IfcBuildingElement';
-        const psetsFormatted = {};
-
-        try {
-          const itemProps = await state.ifcLoader.ifcManager.getItemProperties(object.modelID, targetID);
-          if (itemProps) {
-            name = itemProps.Name?.value || itemProps.ObjectType?.value || name;
+          if (!pivotPoint) {
             try {
-              const fullType = state.ifcLoader.ifcManager.getIfcType(object.modelID, targetID);
-              if (fullType) category = fullType;
-            } catch (e) {}
-
-            psetsFormatted["Propriedades Gerais"] = {
-              "ExpressID": targetID,
-              "Nome": name,
-              "Categoria IFC": category,
-              "GlobalId": itemProps.GlobalId?.value || "N/A",
-              "Tag": itemProps.Tag?.value || "N/A"
-            };
-          }
-        } catch (e) {
-          console.warn('Erro ao ler propriedades básicas do item:', e);
-        }
-
-        // Extrai PropertySets reais (dimensões, materiais, fases do Revit)
-        try {
-          const psets = await state.ifcLoader.ifcManager.getPropertySets(object.modelID, targetID, true);
-          if (Array.isArray(psets)) {
-            for (const pset of psets) {
-              const psetName = pset.Name?.value || 'Outras Propriedades';
-              const group = {};
-              if (Array.isArray(pset.HasProperties)) {
-                for (const prop of pset.HasProperties) {
-                  const propName = prop.Name?.value;
-                  const propVal = prop.NominalValue?.value;
-                  if (propName !== undefined && propVal !== undefined) {
-                    group[propName] = typeof propVal === 'number' ? Number(propVal.toFixed(2)) : String(propVal);
+              if (subset && subset.geometry) {
+                subset.geometry.computeBoundingBox();
+                if (subset.geometry.boundingBox && !subset.geometry.boundingBox.isEmpty()) {
+                  pivotPoint = subset.geometry.boundingBox.getCenter(new THREE.Vector3());
+                  if (subset.matrixWorld) {
+                    pivotPoint.applyMatrix4(subset.matrixWorld);
                   }
                 }
               }
-              if (Object.keys(group).length > 0) {
-                psetsFormatted[psetName] = group;
-              }
+            } catch (e) {
+              console.warn('Erro ao calcular centro geométrico do elemento IFC:', e);
             }
           }
-        } catch (e) {
-          console.warn('Erro ao extrair PropertySets:', e);
-        }
 
-        // Se for um elemento composto com agregação, adiciona ficha de composição
-        if (aggregate) {
-          psetsFormatted["Composição do Elemento"] = {
-            "Estrutura": "Elemento Composto (Hierarquia Revit)",
-            "Total de Partes": `${aggregate.children.length} peças agregadas`,
-            "IDs dos Componentes": aggregate.children.join(", ")
-          };
-        }
-
-        // Se o elemento não possuir Psets no IFC, cria estimativas úteis
-        if (Object.keys(psetsFormatted).length <= 1) {
-          psetsFormatted["Dados Técnicos"] = {
-            "Modelo": "Projeto openBIM IFC",
-            "Geometria": "Sólido WebAssembly",
-            "Status": "Construído (As-Built)"
-          };
-        }
-
-        // Enriquecimento openBIM: Tipo, Qto, Materiais, Dimensões 3D e Quantitativo por Pavimento (Storey)
-        if (typeof enrichIfcElementPayload === 'function') {
-          const richPayload = await enrichIfcElementPayload(
-            object.modelID,
-            targetID,
-            name,
-            category,
-            psetsFormatted,
-            idsToHighlight,
-            Boolean(aggregate)
-          );
-          if (state.similarHighlightedIds && state.similarHighlightedIds.length > 0 && typeof highlightSimilarElements === 'function') {
-            highlightSimilarElements(richPayload.analytics?.allInstanceIds || [], targetID);
+          if (!pivotPoint && hit.point) {
+            pivotPoint = hit.point.clone();
           }
-          notifyFlutter('onElementSelected', richPayload);
+
+          if (pivotPoint) {
+            setElementPivot(pivotPoint, targetID);
+          }
+
+          state.selectedObject = {
+            modelID: object.modelID,
+            expressID: targetID,
+            subIds: idsToHighlight,
+            isComposite: Boolean(aggregate),
+            isIfc: true
+          };
+
+          // Extrai propriedades básicas da linha principal em O(1)
+          let name = `Elemento BIM #${targetID}`;
+          let category = aggregate ? aggregate.type : 'IfcBuildingElement';
+          const psetsFormatted = {};
+
+          try {
+            const itemProps = await state.ifcLoader.ifcManager.getItemProperties(object.modelID, targetID, false);
+            if (itemProps) {
+              name = itemProps.Name?.value || itemProps.ObjectType?.value || name;
+              try {
+                const fullType = state.ifcLoader.ifcManager.getIfcType(object.modelID, targetID);
+                if (fullType) category = fullType;
+              } catch (e) {}
+
+              psetsFormatted["Propriedades Gerais"] = {
+                "ExpressID": targetID,
+                "Nome": typeof decodeIfcStepText === 'function' ? decodeIfcStepText(name) : name,
+                "Categoria IFC": category,
+                "GlobalId": itemProps.GlobalId?.value || "N/A",
+                "Tag": itemProps.Tag?.value || "N/A"
+              };
+            }
+          } catch (e) {
+            console.warn('Erro ao ler propriedades básicas do item:', e);
+          }
+
+          // Se for um elemento composto com agregação, adiciona ficha de composição
+          if (aggregate) {
+            psetsFormatted["Composição do Elemento"] = {
+              "Estrutura": "Elemento Composto (Hierarquia Revit)",
+              "Total de Partes": `${aggregate.children.length} peças agregadas`,
+              "IDs dos Componentes": aggregate.children.join(", ")
+            };
+          }
+
+          // Enriquecimento openBIM O(1) indexado: Psets, Qto, Tipo, Materiais, Dimensões 3D e Quantitativo por Pavimento
+          if (typeof enrichIfcElementPayload === 'function') {
+            const richPayload = await enrichIfcElementPayload(
+              object.modelID,
+              targetID,
+              name,
+              category,
+              psetsFormatted,
+              idsToHighlight,
+              Boolean(aggregate)
+            );
+            if (state.similarHighlightedIds && state.similarHighlightedIds.length > 0 && typeof highlightSimilarElements === 'function') {
+              highlightSimilarElements(richPayload.analytics?.allInstanceIds || [], targetID);
+            }
+            if (typeof waitForNextRenderedFrame === 'function') {
+              await waitForNextRenderedFrame();
+            }
+            notifyFlutter('onElementSelected', richPayload);
+            return;
+          }
+
+          if (Object.keys(psetsFormatted).length <= 1) {
+            psetsFormatted["Dados Técnicos"] = {
+              "Modelo": "Projeto openBIM IFC",
+              "Geometria": "Sólido WebAssembly",
+              "Status": "Construído (As-Built)"
+            };
+          }
+
+          notifyFlutter('onElementSelected', {
+            expressID: targetID,
+            name: name,
+            category: category,
+            psets: psetsFormatted,
+            subIds: idsToHighlight,
+            isComposite: Boolean(aggregate)
+          });
           return;
         }
-
-        notifyFlutter('onElementSelected', {
-          expressID: targetID,
-          name: name,
-          category: category,
-          psets: psetsFormatted,
-          subIds: idsToHighlight,
-          isComposite: Boolean(aggregate)
-        });
-        return;
-      }
-    } catch (err) {
-      console.warn('Falha no destaque IFC:', err);
-    }
-  }
-
-  // 2. Fallback para malhas GLTF ou representações avulsas
-  if (!object.isMesh) return;
-
-  state.selectedObject = object;
-  state.originalMaterial = object.material;
-  object.material = state.highlightMaterial;
-
-  const expressID = object.userData.expressID || object.id || 1001;
-  const elementName = object.name || `Elemento BIM #${expressID}`;
-  const category = object.userData.category || deduceBimCategory(object);
-
-  // Configura o eixo de navegação baseado no elemento selecionado
-  let pivotPoint = null;
-  try {
-    if (object.geometry) {
-      const box = new THREE.Box3().setFromObject(object);
-      if (!box.isEmpty()) {
-        pivotPoint = box.getCenter(new THREE.Vector3());
+      } catch (err) {
+        console.warn('Falha no destaque IFC:', err);
       }
     }
-  } catch (e) {}
 
-  if (!pivotPoint && hit.point) {
-    pivotPoint = hit.point.clone();
-  }
+    // 2. Fallback para malhas GLTF ou representações avulsas
+    if (!object.isMesh) return;
 
-  if (pivotPoint) {
-    setElementPivot(pivotPoint, expressID);
-  }
+    clearSelection(false, false);
 
-  const psets = object.userData.psets || {
-    "Propriedades Gerais": {
-      "ExpressID": expressID,
-      "Nome": elementName,
-      "Categoria IFC": category,
-      "Status": "Construído (As-Built)",
-    }
-  };
+    state.selectedObject = object;
+    state.originalMaterial = object.material;
+    object.material = state.highlightMaterial;
 
-  let gltfAnalytics = null;
-  let gltfDims = {};
-  if (typeof computePieceStoreyAnalytics === 'function') {
+    const expressID = object.userData.expressID || object.id || 1001;
+    const elementName = object.name || `Elemento BIM #${expressID}`;
+    const category = object.userData.category || deduceBimCategory(object);
+
+    // Configura o eixo de navegação baseado no elemento selecionado
+    let pivotPoint = null;
     try {
-      gltfAnalytics = await computePieceStoreyAnalytics(undefined, expressID, elementName, category);
-      const box = getElementWorldBox(expressID);
-      if (!box.isEmpty()) {
-        const sz = box.getSize(new THREE.Vector3());
-        gltfDims = {
-          length: Number(Math.max(sz.x, sz.z).toFixed(3)),
-          width: Number(Math.min(sz.x, sz.z).toFixed(3)),
-          height: Number(sz.y.toFixed(3)),
-          minElevation: Number(box.min.y.toFixed(3)),
-          maxElevation: Number(box.max.y.toFixed(3)),
-        };
+      if (object.geometry) {
+        const box = new THREE.Box3().setFromObject(object);
+        if (!box.isEmpty()) {
+          pivotPoint = box.getCenter(new THREE.Vector3());
+        }
       }
     } catch (e) {}
-  }
 
-  notifyFlutter('onElementSelected', {
-    expressID: expressID,
-    name: elementName,
-    category: category,
-    psets: psets,
-    geometricDimensions: gltfDims,
-    analytics: gltfAnalytics,
-  });
+    if (!pivotPoint && hit.point) {
+      pivotPoint = hit.point.clone();
+    }
+
+    if (pivotPoint) {
+      setElementPivot(pivotPoint, expressID);
+    }
+
+    const psets = object.userData.psets || {
+      "Propriedades Gerais": {
+        "ExpressID": expressID,
+        "Nome": elementName,
+        "Categoria IFC": category,
+        "Status": "Construído (As-Built)",
+      }
+    };
+
+    let gltfAnalytics = null;
+    let gltfDims = {};
+    if (typeof computePieceStoreyAnalytics === 'function') {
+      try {
+        gltfAnalytics = await computePieceStoreyAnalytics(undefined, expressID, elementName, category);
+        const box = getElementWorldBox(expressID);
+        if (!box.isEmpty()) {
+          const sz = box.getSize(new THREE.Vector3());
+          gltfDims = {
+            length: Number(Math.max(sz.x, sz.z).toFixed(3)),
+            width: Number(Math.min(sz.x, sz.z).toFixed(3)),
+            height: Number(sz.y.toFixed(3)),
+            minElevation: Number(box.min.y.toFixed(3)),
+            maxElevation: Number(box.max.y.toFixed(3)),
+          };
+        }
+      } catch (e) {}
+    }
+
+    if (typeof waitForNextRenderedFrame === 'function') {
+      await waitForNextRenderedFrame();
+    }
+
+    notifyFlutter('onElementSelected', {
+      expressID: expressID,
+      name: elementName,
+      category: category,
+      psets: psets,
+      geometricDimensions: gltfDims,
+      analytics: gltfAnalytics,
+    });
+  } finally {
+    state.isTransitioningElement = false;
+  }
 }
 
 /**
- * Remove o destaque azul do elemento e notifica deseleção para o Flutter
+ * Remove o destaque azul do elemento e notifica deseleção para o Flutter (quando aplicável)
  */
-function clearSelection(restorePivot = true) {
+function clearSelection(restorePivot = true, notifyDeselect = true) {
   const modelID = state.selectedObject?.modelID !== undefined
     ? state.selectedObject.modelID
     : (state.currentModel?.modelID);
@@ -349,8 +351,8 @@ function clearSelection(restorePivot = true) {
     }
   }
 
-  // Restaura qualquer malha que tenha userData.originalMaterial
-  if (state.currentModel) {
+  // Restaura qualquer malha que tenha userData.originalMaterial (apenas em modelos não-IFC consolidados)
+  if (state.currentModel && state.currentModel.modelID === undefined) {
     state.currentModel.traverse((child) => {
       if (child.isMesh && child.userData.originalMaterial) {
         child.material = child.userData.originalMaterial;
@@ -359,11 +361,11 @@ function clearSelection(restorePivot = true) {
     });
   }
 
-  // 3. Limpeza defensiva total da cena: garante que NENHUMA malha azul permaneça visível
+  // 3. Limpeza defensiva segura da cena sem descartar BufferAttributes compartilhados do modelo principal
   if (state.scene && state.highlightMaterial) {
     const toRemove = [];
     state.scene.traverse((child) => {
-      if (child.isMesh && (
+      if (child.isMesh && child !== state.currentModel && (
         child.material === state.highlightMaterial ||
         child.material?.uuid === state.highlightMaterial.uuid
       )) {
@@ -378,6 +380,8 @@ function clearSelection(restorePivot = true) {
         state.scene.remove(mesh);
       }
       if (mesh.geometry) {
+        mesh.geometry.attributes = {};
+        mesh.geometry.index = null;
         mesh.geometry.dispose();
       }
     }
@@ -388,7 +392,9 @@ function clearSelection(restorePivot = true) {
   if (restorePivot && state.isElementPivotActive) {
     restoreRootPivot(true);
   }
-  notifyFlutter('onElementDeselected');
+  if (notifyDeselect) {
+    notifyFlutter('onElementDeselected');
+  }
 }
 
 // Exportações

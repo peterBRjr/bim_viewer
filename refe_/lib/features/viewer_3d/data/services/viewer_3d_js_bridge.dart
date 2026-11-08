@@ -18,6 +18,7 @@ abstract class Viewer3dJsBridgeListener {
   void onMeasurementRemoved();
   void onMeasurementCleared();
   void onBimProjectSpecsLoaded(BimProjectSpecs specs);
+  void onElementTransitionBusy(int expressID) {}
 }
 
 /// Serviço responsável por encapsular a comunicação bidirecional (JS Bridge)
@@ -170,6 +171,19 @@ class Viewer3dJsBridge {
         }
       },
     );
+
+    // 9. Sinalização defensiva caso o motor WebGL ainda esteja concluindo a renderização anterior
+    controller.addJavaScriptHandler(
+      handlerName: 'onElementTransitionBusy',
+      callback: (args) {
+        var expressId = 0;
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          expressId = (data['expressID'] as num?)?.toInt() ?? 0;
+        }
+        _listener?.onElementTransitionBusy(expressId);
+      },
+    );
   }
 
   // =========================================================================
@@ -269,6 +283,18 @@ class Viewer3dJsBridge {
   // =========================================================================
   // COMANDOS DA VISUALIZAÇÃO DINÂMICA HORIZONTAL (CÂMERA, INSTÂNCIAS E RAIO-X)
   // =========================================================================
+
+  Future<void> enterDynamicViewMode(int expressID) async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.enterDynamicViewMode) window.enterDynamicViewMode($expressID);',
+    );
+  }
+
+  Future<void> exitDynamicViewMode() async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.exitDynamicViewMode) window.exitDynamicViewMode();',
+    );
+  }
 
   Future<void> focusElementInDynamicView(int expressID) async {
     await _controller?.evaluateJavascript(

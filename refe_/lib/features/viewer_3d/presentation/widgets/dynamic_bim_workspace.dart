@@ -157,6 +157,7 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
 
   Widget _buildLeft3dViewportHud(BuildContext context, BimElementMetadata element) {
     final isIsolated = widget.controller.isElementIsolated(element.expressID);
+    final isSwitching = widget.controller.isSwitchingDynamicElement;
 
     return SafeArea(
       right: false,
@@ -190,24 +191,38 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                           color: AppColors.primary.withValues(alpha: 0.72),
                           borderRadius: BorderRadius.circular(18),
                           border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.14),
+                            color: isSwitching
+                                ? AppColors.accent.withValues(alpha: 0.65)
+                                : Colors.white.withValues(alpha: 0.14),
                           ),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Container(
-                              width: 7,
-                              height: 7,
-                              decoration: const BoxDecoration(
-                                color: AppColors.success,
-                                shape: BoxShape.circle,
+                            if (isSwitching)
+                              const SizedBox(
+                                width: 10,
+                                height: 10,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.8,
+                                  color: Color(0xFF60A5FA),
+                                ),
+                              )
+                            else
+                              Container(
+                                width: 7,
+                                height: 7,
+                                decoration: const BoxDecoration(
+                                  color: AppColors.success,
+                                  shape: BoxShape.circle,
+                                ),
                               ),
-                            ),
                             const SizedBox(width: 6),
                             Flexible(
                               child: Text(
-                                'Vista na Obra • #${element.expressID}',
+                                isSwitching
+                                    ? 'Renderizando peça...'
+                                    : 'Vista na Obra • #${element.expressID}',
                                 style: const TextStyle(
                                   fontFamily: AppTypography.fontFamily,
                                   fontSize: 11,
@@ -236,59 +251,71 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                   borderRadius: BorderRadius.circular(24),
                   child: BackdropFilter(
                     filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF0F172A).withValues(alpha: 0.80),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _buildHudMiniToggle(
-                            icon: Icons.center_focus_strong_rounded,
-                            label: 'Focar Peça',
-                            isActive: false,
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              widget.controller.focusCurrentElementInDynamicView();
-                            },
-                          ),
-                          const SizedBox(width: 4),
-                          _buildHudMiniToggle(
-                            icon: Icons.blur_on_rounded,
-                            label: 'Raio-X Obra',
-                            isActive: widget.controller.isDynamicXrayActive,
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              widget.controller.toggleDynamicXrayContext();
-                            },
-                          ),
-                          const SizedBox(width: 4),
-                          _buildHudMiniToggle(
-                            icon: Icons.auto_awesome_rounded,
-                            label: 'Similares 3D',
-                            isActive: widget.controller.highlightSimilarIn3D,
-                            activeColor: AppColors.success,
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              widget.controller.toggleHighlightSimilarIn3D();
-                            },
-                          ),
-                          const SizedBox(width: 4),
-                          _buildHudMiniToggle(
-                            icon: isIsolated
-                                ? Icons.all_inclusive_rounded
-                                : Icons.filter_center_focus_rounded,
-                            label: isIsolated ? 'Ver Obra' : 'Isolar',
-                            isActive: isIsolated,
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              widget.controller.isolateSelectedElement();
-                            },
-                          ),
-                        ],
+                    child: AnimatedOpacity(
+                      duration: const Duration(milliseconds: 140),
+                      opacity: isSwitching ? 0.55 : 1.0,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0F172A).withValues(alpha: 0.80),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _buildHudMiniToggle(
+                              icon: Icons.center_focus_strong_rounded,
+                              label: 'Focar Peça',
+                              isActive: false,
+                              onTap: isSwitching
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      widget.controller.focusCurrentElementInDynamicView();
+                                    },
+                            ),
+                            const SizedBox(width: 4),
+                            _buildHudMiniToggle(
+                              icon: Icons.blur_on_rounded,
+                              label: 'Raio-X Obra',
+                              isActive: widget.controller.isDynamicXrayActive,
+                              onTap: isSwitching
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      widget.controller.toggleDynamicXrayContext();
+                                    },
+                            ),
+                            const SizedBox(width: 4),
+                            _buildHudMiniToggle(
+                              icon: Icons.auto_awesome_rounded,
+                              label: 'Similares 3D',
+                              isActive: widget.controller.highlightSimilarIn3D,
+                              activeColor: AppColors.success,
+                              onTap: isSwitching
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      widget.controller.toggleHighlightSimilarIn3D();
+                                    },
+                            ),
+                            const SizedBox(width: 4),
+                            _buildHudMiniToggle(
+                              icon: isIsolated
+                                  ? Icons.all_inclusive_rounded
+                                  : Icons.filter_center_focus_rounded,
+                              label: isIsolated ? 'Ver Obra' : 'Isolar',
+                              isActive: isIsolated,
+                              onTap: isSwitching
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      widget.controller.isolateSelectedElement();
+                                    },
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -349,7 +376,7 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
     required String label,
     required bool isActive,
     Color activeColor = AppColors.accent,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
   }) {
     return Material(
       color: Colors.transparent,
@@ -696,6 +723,7 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
   Widget _buildStoreyQuantityCard(BimElementMetadata element) {
     final storeys = widget.controller.availableStoreys;
     final selectedStoreyId = widget.controller.selectedStoreyFilterId;
+    final isSwitching = widget.controller.isSwitchingDynamicElement;
     final analytics = element.analytics ??
         BimPieceAnalytics(
           typeName: element.cleanTitle,
@@ -893,10 +921,12 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                     );
                   }),
                 ],
-                onChanged: (newStoreyId) {
-                  HapticFeedback.selectionClick();
-                  widget.controller.setStoreyFilter(newStoreyId);
-                },
+                onChanged: isSwitching
+                    ? null
+                    : (newStoreyId) {
+                        HapticFeedback.selectionClick();
+                        widget.controller.setStoreyFilter(newStoreyId);
+                      },
               ),
             ),
           ),
@@ -907,7 +937,7 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 220),
             child: Column(
-              key: ValueKey('storey_stats_${validSelectedId ?? "ALL"}_${element.expressID}'),
+              key: ValueKey('storey_stats_${validSelectedId ?? "ALL"}_${analytics.typeName}'),
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Cards Principais de Contagem
@@ -1088,7 +1118,7 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                   ),
                 ],
 
-                // Navegador Interativo de Instâncias no 3D (< Peça X de N > + Destacar Todas)
+                // Navegador Interativo de Instâncias no 3D (< Peça X de N > + Destacar Todas) com sincronização anti-gargalo
                 if (instancesInScope.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Container(
@@ -1096,90 +1126,127 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                     decoration: BoxDecoration(
                       color: AppColors.background,
                       borderRadius: BorderRadius.circular(9),
-                      border: Border.all(color: AppColors.border),
+                      border: Border.all(
+                        color: isSwitching
+                            ? AppColors.accent.withValues(alpha: 0.45)
+                            : AppColors.border,
+                      ),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.my_location_rounded, size: 14, color: AppColors.accent),
+                        if (isSwitching)
+                          const SizedBox(
+                            key: ValueKey('instance_loading_indicator'),
+                            width: 13,
+                            height: 13,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.accent,
+                            ),
+                          )
+                        else
+                          const Icon(Icons.my_location_rounded, size: 14, color: AppColors.accent),
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            currentIndexInScope >= 0
-                                ? 'Inspecionando ${currentIndexInScope + 1} de ${instancesInScope.length} nesta vista'
-                                : '${instancesInScope.length} un. disponíveis neste nível',
-                            style: const TextStyle(
+                            isSwitching
+                                ? 'Carregando e renderizando peça...'
+                                : (currentIndexInScope >= 0
+                                    ? 'Inspecionando ${currentIndexInScope + 1} de ${instancesInScope.length} nesta vista'
+                                    : '${instancesInScope.length} un. disponíveis neste nível'),
+                            style: TextStyle(
                               fontFamily: AppTypography.fontFamily,
                               fontSize: 11.5,
                               fontWeight: FontWeight.w600,
-                              color: AppColors.textDark,
+                              color: isSwitching ? AppColors.accent : AppColors.textDark,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         if (instancesInScope.length > 1) ...[
-                          InkWell(
-                            borderRadius: BorderRadius.circular(6),
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              final prevIdx = currentIndexInScope > 0
-                                  ? currentIndexInScope - 1
-                                  : instancesInScope.length - 1;
-                              widget.controller.inspectPieceInstance(instancesInScope[prevIdx]);
-                            },
-                            child: const Padding(
-                              padding: EdgeInsets.all(4),
-                              child: Icon(Icons.chevron_left_rounded, size: 18, color: AppColors.primary),
+                          AnimatedOpacity(
+                            duration: const Duration(milliseconds: 120),
+                            opacity: isSwitching ? 0.32 : 1.0,
+                            child: InkWell(
+                              key: const ValueKey('instance_prev_button'),
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: isSwitching
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      final prevIdx = currentIndexInScope > 0
+                                          ? currentIndexInScope - 1
+                                          : instancesInScope.length - 1;
+                                      widget.controller.inspectPieceInstance(instancesInScope[prevIdx]);
+                                    },
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.chevron_left_rounded, size: 18, color: AppColors.primary),
+                              ),
                             ),
                           ),
-                          InkWell(
-                            borderRadius: BorderRadius.circular(6),
-                            onTap: () {
-                              HapticFeedback.selectionClick();
-                              final nextIdx = currentIndexInScope >= 0 &&
-                                      currentIndexInScope < instancesInScope.length - 1
-                                  ? currentIndexInScope + 1
-                                  : 0;
-                              widget.controller.inspectPieceInstance(instancesInScope[nextIdx]);
-                            },
-                            child: const Padding(
-                              padding: EdgeInsets.all(4),
-                              child: Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.primary),
+                          AnimatedOpacity(
+                            duration: const Duration(milliseconds: 120),
+                            opacity: isSwitching ? 0.32 : 1.0,
+                            child: InkWell(
+                              key: const ValueKey('instance_next_button'),
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: isSwitching
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      final nextIdx = currentIndexInScope >= 0 &&
+                                              currentIndexInScope < instancesInScope.length - 1
+                                          ? currentIndexInScope + 1
+                                          : 0;
+                                      widget.controller.inspectPieceInstance(instancesInScope[nextIdx]);
+                                    },
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.chevron_right_rounded, size: 18, color: AppColors.primary),
+                              ),
                             ),
                           ),
                           const SizedBox(width: 4),
                         ],
-                        InkWell(
-                          borderRadius: BorderRadius.circular(6),
-                          onTap: () {
-                            HapticFeedback.selectionClick();
-                            if (instancesInScope.length == 1 && currentIndexInScope < 0) {
-                              widget.controller.inspectPieceInstance(instancesInScope.first);
-                            } else {
-                              widget.controller.toggleHighlightSimilarIn3D();
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: widget.controller.highlightSimilarIn3D
-                                  ? AppColors.success
-                                  : AppColors.accent.withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              instancesInScope.length == 1 && currentIndexInScope < 0
-                                  ? 'Ir até Peça'
-                                  : (widget.controller.highlightSimilarIn3D
-                                      ? 'Destacadas'
-                                      : 'Ver no 3D'),
-                              style: TextStyle(
-                                fontFamily: AppTypography.fontFamily,
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w700,
+                        AnimatedOpacity(
+                          duration: const Duration(milliseconds: 120),
+                          opacity: isSwitching ? 0.38 : 1.0,
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(6),
+                            onTap: isSwitching
+                                ? null
+                                : () {
+                                    HapticFeedback.selectionClick();
+                                    if (instancesInScope.length == 1 && currentIndexInScope < 0) {
+                                      widget.controller.inspectPieceInstance(instancesInScope.first);
+                                    } else {
+                                      widget.controller.toggleHighlightSimilarIn3D();
+                                    }
+                                  },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
                                 color: widget.controller.highlightSimilarIn3D
-                                    ? AppColors.surface
-                                    : AppColors.accent,
+                                    ? AppColors.success
+                                    : AppColors.accent.withValues(alpha: 0.12),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                instancesInScope.length == 1 && currentIndexInScope < 0
+                                    ? 'Ir até Peça'
+                                    : (widget.controller.highlightSimilarIn3D
+                                        ? 'Destacadas'
+                                        : 'Ver no 3D'),
+                                style: TextStyle(
+                                  fontFamily: AppTypography.fontFamily,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: widget.controller.highlightSimilarIn3D
+                                      ? AppColors.surface
+                                      : AppColors.accent,
+                                ),
                               ),
                             ),
                           ),

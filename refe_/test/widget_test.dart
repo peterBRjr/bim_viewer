@@ -6,6 +6,7 @@ import 'package:refe_/features/home/data/services/storage_service.dart';
 import 'package:refe_/features/home/presentation/controllers/home_controller.dart';
 import 'package:refe_/features/home/presentation/widgets/project_card.dart';
 import 'package:refe_/features/home/presentation/widgets/confirm_delete_dialog.dart';
+import 'package:refe_/features/viewer_3d/data/services/viewer_3d_js_bridge.dart';
 import 'package:refe_/features/viewer_3d/presentation/controllers/viewer_3d_controller.dart';
 import 'package:refe_/features/viewer_3d/presentation/widgets/bim_metadata_bottom_sheet.dart';
 import 'package:refe_/features/viewer_3d/presentation/widgets/bim_tabbar.dart';
@@ -33,6 +34,27 @@ class FakeStorageService extends StorageService {
   Future<bool> deleteProject(String projectId) async {
     fakeCatalog.removeWhere((p) => p.id == projectId);
     return true;
+  }
+}
+
+class RecordingViewer3dJsBridge extends Viewer3dJsBridge {
+  final List<int> selectCalls = [];
+  final List<int> focusCalls = [];
+  int clearSimilarCalls = 0;
+
+  @override
+  Future<void> selectElementByExpressId(int expressID, {bool focusCamera = true}) async {
+    selectCalls.add(expressID);
+  }
+
+  @override
+  Future<void> focusElementInDynamicView(int expressID) async {
+    focusCalls.add(expressID);
+  }
+
+  @override
+  Future<void> clearSimilarHighlights() async {
+    clearSimilarCalls++;
   }
 }
 
@@ -688,10 +710,23 @@ void main() {
       expect(controller.selectedStoreyFilterId, 30);
       expect(element.analytics!.countForStorey(30), 0);
 
+      // Altera estados temporários dentro da Visualização Dinâmica (Isolar, Raio-X, Similares 3D)
+      expect(controller.isIsolated, isFalse);
+      await controller.isolateSelectedElement();
+      expect(controller.isIsolated, isTrue);
+      await controller.toggleDynamicXrayContext();
+      expect(controller.isDynamicXrayActive, isTrue);
+      await controller.toggleHighlightSimilarIn3D();
+      expect(controller.highlightSimilarIn3D, isTrue);
+
+      // Ao sair da Visualização Dinâmica, TUDO deve voltar exatamente como estava antes
       await controller.exitDynamicView();
       expect(controller.isDynamicViewActive, isFalse);
-      // Aguarda o timer defensivo de 450ms de restauração de orientação
-      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(controller.isIsolated, isFalse);
+      expect(controller.isDynamicXrayActive, isFalse);
+      expect(controller.highlightSimilarIn3D, isFalse);
+      expect(controller.selectedStoreyFilterId, isNull);
+      expect(controller.selectedElement?.expressID, 354);
     });
 
     testWidgets('DynamicBimWorkspace updates quantities dynamically on Storey Dropdown change and resizes split view', (WidgetTester tester) async {
@@ -805,6 +840,143 @@ void main() {
       await tester.drag(handleFinder, const Offset(160, 0));
       await tester.pumpAndSettle();
       expect(controller.dynamicSplitRatio, greaterThan(0.52));
+
+      await controller.exitDynamicView();
+      await tester.pump(const Duration(milliseconds: 500));
+    });
+
+    testWidgets('DynamicBimWorkspace blocks rapid clicks on 146 columns until current load and render complete', (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1600, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final bridge = RecordingViewer3dJsBridge();
+      final controller = Viewer3DController(jsBridge: bridge);
+      addTearDown(controller.dispose);
+      controller.onViewerReady();
+
+      final columnIds = List<int>.generate(146, (i) => 1001 + i);
+
+      Map<String, dynamic> buildColumnPayload(int expressId, {bool alreadyFocused = false}) {
+        return {
+          'expressID': expressId,
+          'name': 'M_Pilar Retangular Concreto:40x60cm:$expressId',
+          'category': 'IfcColumn',
+          'hostStoreyId': 10,
+          'hostStoreyName': 'Térreo Estrutural',
+          'alreadyFocusedInJs': alreadyFocused,
+          'analytics': {
+            'typeName': 'M_Pilar Retangular Concreto:40x60cm',
+            'hostStoreyId': 10,
+            'hostStoreyName': 'Térreo Estrutural',
+            'totalInProject': 146,
+            'totalCategoryInProject': 146,
+            'allInstanceIds': columnIds,
+            'countByStorey': {'10': 146},
+            'instanceIdsByStorey': {'10': columnIds},
+            'categoryCountByStorey': {'10': 146},
+            'totalMetrics': {'lengthM': 87.6, 'areaM2': 315.36, 'volumeM3': 126.14},
+            'metricsByStorey': {
+              '10': {'lengthM': 87.6, 'areaM2': 315.36, 'volumeM3': 126.14},
+            },
+          },
+          'psets': {
+            'Pset_ColumnCommon': {'LoadBearing': '.T.', 'Reference': 'P-40x60'},
+          },
+        };
+      }
+
+      controller.onBimProjectSpecsLoaded(BimProjectSpecs.fromMap({
+        'schema': 'IFC4',
+        'projectName': 'Galpão Industrial Randon',
+        'totalElements': 850,
+        'storeys': [
+          {'expressID': 10, 'name': 'Térreo Estrutural', 'elevationMeters': 0.0, 'totalElementsInStorey': 850},
+        ],
+        'categorySummary': {'IfcColumn': 146},
+      }));
+
+      controller.onElementSelected(BimElementMetadata.fromMap(buildColumnPayload(1001)));
+      await controller.enterDynamicView();
+
+      final project = ProjectModel(
+        id: 'proj-randon',
+        name: 'randon.ifc',
+        filePath: '/local/randon.ifc',
+        fileSizeMB: 92.4,
+        format: 'IFC',
+        createdAt: DateTime(2026, 11, 8),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: controller,
+              builder: (context, _) {
+                return DynamicBimWorkspace(
+                  controller: controller,
+                  project: project,
+                  totalWidth: 1600,
+                  leftViewportWidth: 1600 * controller.dynamicSplitRatio,
+                  onExit: () => controller.exitDynamicView(),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Inspecionando 1 de 146 nesta vista'), findsOneWidget);
+      expect(controller.isSwitchingDynamicElement, isFalse);
+
+      // Dispara 8 cliques rápidos consecutivos na seta ">" antes de concluir o carregamento do Pilar #2
+      final nextBtn = find.byKey(const ValueKey('instance_next_button'));
+      await tester.tap(nextBtn);
+      await tester.tap(nextBtn);
+      await tester.tap(nextBtn);
+      await tester.pump(const Duration(milliseconds: 40));
+
+      // Verifica que os cliques excedentes foram bloqueados e o estado visual de carregamento está ativo
+      expect(controller.isSwitchingDynamicElement, isTrue);
+      expect(find.byKey(const ValueKey('instance_loading_indicator')), findsOneWidget);
+      expect(find.text('Carregando e renderizando peça...'), findsOneWidget);
+
+      // Mais 5 tentativas de clique enquanto o botão está desabilitado aguardando renderização
+      await tester.tap(nextBtn, warnIfMissed: false);
+      await tester.tap(nextBtn, warnIfMissed: false);
+      await controller.inspectPieceInstance(1005);
+      await controller.inspectPieceInstance(1006);
+      await controller.inspectPieceInstance(1007);
+
+      // Apenas UMA chamada JS (1002) deve ter passado pela ponte! Zero gargalo ou fila concorrente
+      expect(bridge.selectCalls, [1002]);
+      expect(bridge.focusCalls, isEmpty);
+      expect(bridge.clearSimilarCalls, 0);
+
+      // Agora simula a conclusão do carregamento e frame WebGL do Pilar #2 (1002)
+      controller.onElementSelected(
+        BimElementMetadata.fromMap(buildColumnPayload(1002, alreadyFocused: true)),
+      );
+
+      // Aguarda o commit do frame do Flutter (addPostFrameCallback)
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 160));
+
+      expect(controller.isSwitchingDynamicElement, isFalse);
+      expect(find.text('Inspecionando 2 de 146 nesta vista'), findsOneWidget);
+      expect(find.byKey(const ValueKey('instance_loading_indicator')), findsNothing);
+      // Zero chamadas redundantes de foco ou limpeza de subsets similares
+      expect(bridge.focusCalls, isEmpty);
+      expect(bridge.clearSimilarCalls, 0);
+
+      // Com o carregamento e renderização finalizados, o próximo clique avança normalmente para o Pilar #3 (1003)
+      await tester.tap(nextBtn);
+      await tester.pump(const Duration(milliseconds: 40));
+      expect(bridge.selectCalls, [1002, 1003]);
+      expect(controller.isSwitchingDynamicElement, isTrue);
 
       await controller.exitDynamicView();
       await tester.pump(const Duration(milliseconds: 500));
