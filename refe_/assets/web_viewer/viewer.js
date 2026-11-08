@@ -24,13 +24,20 @@ function initEngine() {
   // 3. Inicializa parser IFC com WebAssembly
   initIfcEngine();
 
-  // 4. Registra ouvintes de redimensionamento e toque/clique
+  // 4. Registra ouvintes de redimensionamento, bloqueio de gestos nativos do WebKit e toque/clique
   window.addEventListener('resize', onWindowResize);
-  state.renderer.domElement.addEventListener('pointerdown', onPointerDown);
-  state.renderer.domElement.addEventListener('pointerup', onPointerUp);
-  state.renderer.domElement.addEventListener('pointercancel', () => {
-    state.pointerDownPos = null;
-  });
+  const domEl = state.renderer.domElement;
+  domEl.addEventListener('pointerdown', onPointerDown);
+  domEl.addEventListener('pointerup', onPointerUp);
+  domEl.addEventListener('pointercancel', onPointerCancel);
+  window.addEventListener('blur', resetPointerTracking);
+
+  // Bloqueia interceptação nativa de pinça/rotação do iOS WKWebView/Safari para entregar 100% dos 2 dedos ao WebGL
+  const preventNativeGesture = (e) => e.preventDefault();
+  document.addEventListener('gesturestart', preventNativeGesture, { passive: false });
+  document.addEventListener('gesturechange', preventNativeGesture, { passive: false });
+  document.addEventListener('gestureend', preventNativeGesture, { passive: false });
+  domEl.addEventListener('dblclick', preventNativeGesture, { passive: false });
 
   // 5. Inicia o loop de animação contínuo
   animate();
@@ -61,23 +68,69 @@ function animate() {
 }
 
 /**
- * Registro de início de clique/toque
+ * Limpa rastreamento de ponteiros ativos (ex.: perda de foco ou cancelamento do SO)
  */
-function onPointerDown(event) {
-  state.pointerDownPos = { x: event.clientX, y: event.clientY, time: Date.now() };
+function resetPointerTracking() {
+  state.activePointers.clear();
+  state.multiTouchGestureOccurred = false;
+  state.pointerDownPos = null;
 }
 
 /**
- * Processamento de seleção por Raycaster (apenas se for clique simples, não arrasto)
+ * Cancelamento de ponteiro (notificação do sistema, gesto multitouch abortado)
+ */
+function onPointerCancel(event) {
+  state.activePointers.delete(event.pointerId);
+  if (state.activePointers.size === 0) {
+    state.multiTouchGestureOccurred = false;
+  }
+  state.pointerDownPos = null;
+}
+
+/**
+ * Registro de início de clique/toque com bloqueio contra falso clique em gestos de 2 dedos
+ */
+function onPointerDown(event) {
+  state.activePointers.add(event.pointerId);
+
+  if (state.activePointers.size > 1) {
+    state.multiTouchGestureOccurred = true;
+    state.pointerDownPos = null;
+    return;
+  }
+
+  if (!state.multiTouchGestureOccurred) {
+    state.pointerDownPos = {
+      x: event.clientX,
+      y: event.clientY,
+      time: Date.now(),
+      pointerId: event.pointerId,
+    };
+  }
+}
+
+/**
+ * Processamento de seleção por Raycaster (apenas se for toque simples de 1 dedo, sem arrasto nem multi-touch)
  */
 async function onPointerUp(event) {
-  if (!state.pointerDownPos) return;
+  state.activePointers.delete(event.pointerId);
+
+  // Se houve gesto de 2+ dedos, ignora seleção até todos os dedos saírem da tela
+  if (state.multiTouchGestureOccurred) {
+    if (state.activePointers.size === 0) {
+      state.multiTouchGestureOccurred = false;
+    }
+    state.pointerDownPos = null;
+    return;
+  }
+
+  if (!state.pointerDownPos || state.pointerDownPos.pointerId !== event.pointerId) return;
 
   const deltaX = Math.abs(event.clientX - state.pointerDownPos.x);
   const deltaY = Math.abs(event.clientY - state.pointerDownPos.y);
   const deltaTime = Date.now() - (state.pointerDownPos.time || 0);
   const isTouch = event.pointerType === 'touch';
-  const maxDelta = isTouch ? 20 : 10;
+  const maxDelta = isTouch ? 18 : 10;
 
   state.pointerDownPos = null;
 

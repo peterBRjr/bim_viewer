@@ -59,6 +59,10 @@
 			this.enableRotate = true;
 			this.rotateSpeed = 1.0; // Set to false to disable panning
 
+			// Rotação circular com 2 dedos (giro em compasso / twist multi-touch)
+			this.enableTwistRotate = true;
+			this.twistRotateSpeed = 1.15;
+
 			this.enablePan = true;
 			this.panSpeed = 1.0;
 			this.screenSpacePanning = true; // if false, pan orthogonal to world-space direction camera.up
@@ -124,8 +128,18 @@
 
 			};
 
+			this.stopInertia = function () {
+
+				sphericalDelta.set( 0, 0, 0 );
+				panOffset.set( 0, 0, 0 );
+				zoomDelta = 0;
+				scale = 1;
+
+			};
+
 			this.reset = function () {
 
+				scope.stopInertia();
 				scope.target.copy( scope.target0 );
 				scope.object.position.copy( scope.position0 );
 				scope.object.zoom = scope.zoom0;
@@ -146,7 +160,17 @@
 				const lastPosition = new THREE.Vector3();
 				const lastQuaternion = new THREE.Quaternion();
 				const twoPI = 2 * Math.PI;
+				let lastUpdateTime = ( typeof performance !== 'undefined' ? performance.now() : Date.now() ) - 16.667;
+
 				return function update() {
+
+					const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+					const elapsedMs = Math.min( 64, Math.max( 0, now - lastUpdateTime ) );
+					lastUpdateTime = now;
+					const dtFrames = elapsedMs / 16.6667;
+					const dampingAlpha = scope.enableDamping
+						? ( 1 - Math.pow( Math.max( 0.001, 1 - scope.dampingFactor ), dtFrames ) )
+						: 1;
 
 					const position = scope.object.position;
 					offset.copy( position ).sub( scope.target ); // rotate offset to "y-axis-is-up" space
@@ -163,8 +187,8 @@
 
 					if ( scope.enableDamping ) {
 
-						spherical.theta += sphericalDelta.theta * scope.dampingFactor;
-						spherical.phi += sphericalDelta.phi * scope.dampingFactor;
+						spherical.theta += sphericalDelta.theta * dampingAlpha;
+						spherical.phi += sphericalDelta.phi * dampingAlpha;
 
 					} else {
 
@@ -197,13 +221,46 @@
 
 					spherical.phi = Math.max( scope.minPolarAngle, Math.min( scope.maxPolarAngle, spherical.phi ) );
 					spherical.makeSafe();
-					spherical.radius *= scale; // restrict radius to be between desired limits
-
-					spherical.radius = Math.max( scope.minDistance, Math.min( scope.maxDistance, spherical.radius ) ); // move target to panned location
 
 					if ( scope.enableDamping === true ) {
 
-						scope.target.addScaledVector( panOffset, scope.dampingFactor );
+						if ( Math.abs( zoomDelta ) > 1e-7 ) {
+
+							const stepZoom = zoomDelta * dampingAlpha;
+							spherical.radius *= Math.exp( stepZoom );
+							zoomDelta -= stepZoom;
+
+						} else {
+
+							zoomDelta = 0;
+
+						}
+						spherical.radius *= scale;
+
+					} else {
+
+						spherical.radius *= scale;
+						zoomDelta = 0;
+
+					}
+
+					// restrict radius to be between desired limits e evita acúmulo de zoom além dos limites
+					if ( spherical.radius <= scope.minDistance ) {
+
+						spherical.radius = scope.minDistance;
+						if ( zoomDelta < 0 ) zoomDelta = 0;
+
+					} else if ( spherical.radius >= scope.maxDistance ) {
+
+						spherical.radius = scope.maxDistance;
+						if ( zoomDelta > 0 ) zoomDelta = 0;
+
+					}
+
+					// move target to panned location
+					if ( scope.enableDamping === true ) {
+
+						scope.target.addScaledVector( panOffset, dampingAlpha );
 
 					} else {
 
@@ -219,9 +276,14 @@
 
 					if ( scope.enableDamping === true ) {
 
-						sphericalDelta.theta *= 1 - scope.dampingFactor;
-						sphericalDelta.phi *= 1 - scope.dampingFactor;
-						panOffset.multiplyScalar( 1 - scope.dampingFactor );
+						const retain = 1 - dampingAlpha;
+						sphericalDelta.theta *= retain;
+						sphericalDelta.phi *= retain;
+						panOffset.multiplyScalar( retain );
+
+						if ( Math.abs( sphericalDelta.theta ) < 1e-7 ) sphericalDelta.theta = 0;
+						if ( Math.abs( sphericalDelta.phi ) < 1e-7 ) sphericalDelta.phi = 0;
+						if ( panOffset.lengthSq() < 1e-12 ) panOffset.set( 0, 0, 0 );
 
 					} else {
 
@@ -257,6 +319,7 @@
 				scope.domElement.removeEventListener( 'wheel', onMouseWheel );
 				scope.domElement.removeEventListener( 'touchstart', onTouchStart );
 				scope.domElement.removeEventListener( 'touchend', onTouchEnd );
+				scope.domElement.removeEventListener( 'touchcancel', onTouchCancel );
 				scope.domElement.removeEventListener( 'touchmove', onTouchMove );
 				scope.domElement.ownerDocument.removeEventListener( 'pointermove', onPointerMove );
 				scope.domElement.ownerDocument.removeEventListener( 'pointerup', onPointerUp );
@@ -289,6 +352,7 @@
 			const spherical = new THREE.Spherical();
 			const sphericalDelta = new THREE.Spherical();
 			let scale = 1;
+			let zoomDelta = 0;
 			const panOffset = new THREE.Vector3();
 			let zoomChanged = false;
 			const rotateStart = new THREE.Vector2();
@@ -300,6 +364,15 @@
 			const dollyStart = new THREE.Vector2();
 			const dollyEnd = new THREE.Vector2();
 			const dollyDelta = new THREE.Vector2();
+
+			// Estado interno para rotação suave com 2 dedos (giro em compasso) e transições fluidas
+			let twistStartAngle = 0;
+			let twistAccumulated = 0;
+			let twistUnlocked = false;
+			let twistDirectionSign = 1;
+			let lastTouchMoveTime = 0;
+			const TWIST_MIN_DISTANCE = 28;
+			const TWIST_UNLOCK_RAD = 0.02;
 
 			function getAutoRotationAngle() {
 
@@ -404,7 +477,15 @@
 
 				if ( scope.object.isPerspectiveCamera ) {
 
-					scale /= dollyScale;
+					if ( scope.enableDamping === true && dollyScale > 0 ) {
+
+						zoomDelta -= Math.log( dollyScale );
+
+					} else if ( dollyScale > 0 ) {
+
+						scale /= dollyScale;
+
+					}
 
 				} else if ( scope.object.isOrthographicCamera ) {
 
@@ -425,7 +506,15 @@
 
 				if ( scope.object.isPerspectiveCamera ) {
 
-					scale *= dollyScale;
+					if ( scope.enableDamping === true && dollyScale > 0 ) {
+
+						zoomDelta += Math.log( dollyScale );
+
+					} else if ( dollyScale > 0 ) {
+
+						scale *= dollyScale;
+
+					}
 
 				} else if ( scope.object.isOrthographicCamera ) {
 
@@ -472,7 +561,7 @@
 
 				rotateUp( 2 * Math.PI * rotateDelta.y / element.clientHeight );
 				rotateStart.copy( rotateEnd );
-				scope.update();
+				if ( ! scope.enableDamping ) scope.update();
 
 			}
 
@@ -492,7 +581,7 @@
 				}
 
 				dollyStart.copy( dollyEnd );
-				scope.update();
+				if ( ! scope.enableDamping ) scope.update();
 
 			}
 
@@ -502,7 +591,7 @@
 				panDelta.subVectors( panEnd, panStart ).multiplyScalar( scope.panSpeed );
 				pan( panDelta.x, panDelta.y );
 				panStart.copy( panEnd );
-				scope.update();
+				if ( ! scope.enableDamping ) scope.update();
 
 			}
 
@@ -521,7 +610,7 @@
 
 				}
 
-				scope.update();
+				if ( ! scope.enableDamping ) scope.update();
 
 			}
 
@@ -557,7 +646,7 @@
 
 					// prevent the browser from scrolling on cursor keys
 					event.preventDefault();
-					scope.update();
+					if ( ! scope.enableDamping ) scope.update();
 
 				}
 
@@ -565,11 +654,11 @@
 
 			function handleTouchStartRotate( event ) {
 
-				if ( event.touches.length == 1 ) {
+				if ( event.touches.length === 1 ) {
 
 					rotateStart.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
 
-				} else {
+				} else if ( event.touches.length >= 2 ) {
 
 					const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
 					const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
@@ -581,11 +670,11 @@
 
 			function handleTouchStartPan( event ) {
 
-				if ( event.touches.length == 1 ) {
+				if ( event.touches.length === 1 ) {
 
 					panStart.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
 
-				} else {
+				} else if ( event.touches.length >= 2 ) {
 
 					const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
 					const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
@@ -597,10 +686,24 @@
 
 			function handleTouchStartDolly( event ) {
 
+				if ( event.touches.length < 2 ) return;
 				const dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
 				const dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
-				const distance = Math.sqrt( dx * dx + dy * dy );
+				const distance = Math.max( 8, Math.hypot( dx, dy ) );
 				dollyStart.set( 0, distance );
+
+			}
+
+			function handleTouchStartTwist( event ) {
+
+				if ( event.touches.length < 2 ) return;
+				const dx = event.touches[ 1 ].pageX - event.touches[ 0 ].pageX;
+				const dy = event.touches[ 1 ].pageY - event.touches[ 0 ].pageY;
+				twistStartAngle = Math.atan2( dy, dx );
+				twistAccumulated = 0;
+				twistUnlocked = false;
+				// Preserva a coerência horária/anti-horária mesmo se a câmera estiver olhando de baixo para cima
+				twistDirectionSign = ( spherical.phi > Math.PI * 0.58 ) ? - 1 : 1;
 
 			}
 
@@ -608,50 +711,67 @@
 
 				if ( scope.enableZoom ) handleTouchStartDolly( event );
 				if ( scope.enablePan ) handleTouchStartPan( event );
+				if ( scope.enableRotate && scope.enableTwistRotate ) handleTouchStartTwist( event );
 
 			}
 
 			function handleTouchStartDollyRotate( event ) {
 
 				if ( scope.enableZoom ) handleTouchStartDolly( event );
-				if ( scope.enableRotate ) handleTouchStartRotate( event );
+				if ( scope.enableRotate ) {
+
+					handleTouchStartRotate( event );
+					if ( scope.enableTwistRotate ) handleTouchStartTwist( event );
+
+				}
 
 			}
 
 			function handleTouchMoveRotate( event ) {
 
-				if ( event.touches.length == 1 ) {
+				if ( event.touches.length === 1 ) {
 
 					rotateEnd.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
 
-				} else {
+				} else if ( event.touches.length >= 2 ) {
 
 					const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
 					const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
 					rotateEnd.set( x, y );
 
+				} else {
+
+					return;
+
 				}
 
 				rotateDelta.subVectors( rotateEnd, rotateStart ).multiplyScalar( scope.rotateSpeed );
 				const element = scope.domElement;
-				rotateLeft( 2 * Math.PI * rotateDelta.x / element.clientHeight ); // yes, height
+				// Calibração ergonômica para telas mobile em modo retrato sem distorcer telas largas
+				const horizBasis = Math.max( 300, Math.min( element.clientHeight || 600, ( element.clientWidth || 400 ) * 1.35 ) );
+				const vertBasis = Math.max( 300, element.clientHeight || 600 );
 
-				rotateUp( 2 * Math.PI * rotateDelta.y / element.clientHeight );
+				rotateLeft( 2 * Math.PI * rotateDelta.x / horizBasis );
+				rotateUp( 2 * Math.PI * rotateDelta.y / vertBasis );
 				rotateStart.copy( rotateEnd );
 
 			}
 
 			function handleTouchMovePan( event ) {
 
-				if ( event.touches.length == 1 ) {
+				if ( event.touches.length === 1 ) {
 
 					panEnd.set( event.touches[ 0 ].pageX, event.touches[ 0 ].pageY );
 
-				} else {
+				} else if ( event.touches.length >= 2 ) {
 
 					const x = 0.5 * ( event.touches[ 0 ].pageX + event.touches[ 1 ].pageX );
 					const y = 0.5 * ( event.touches[ 0 ].pageY + event.touches[ 1 ].pageY );
 					panEnd.set( x, y );
+
+				} else {
+
+					return;
 
 				}
 
@@ -663,13 +783,61 @@
 
 			function handleTouchMoveDolly( event ) {
 
+				if ( event.touches.length < 2 ) return;
 				const dx = event.touches[ 0 ].pageX - event.touches[ 1 ].pageX;
 				const dy = event.touches[ 0 ].pageY - event.touches[ 1 ].pageY;
-				const distance = Math.sqrt( dx * dx + dy * dy );
+				const distance = Math.max( 8, Math.hypot( dx, dy ) );
 				dollyEnd.set( 0, distance );
-				dollyDelta.set( 0, Math.pow( dollyEnd.y / dollyStart.y, scope.zoomSpeed ) );
-				dollyOut( dollyDelta.y );
+				if ( dollyStart.y > 0 ) {
+
+					dollyDelta.set( 0, Math.pow( dollyEnd.y / dollyStart.y, scope.zoomSpeed ) );
+					dollyOut( dollyDelta.y );
+
+				}
 				dollyStart.copy( dollyEnd );
+
+			}
+
+			function handleTouchMoveTwist( event ) {
+
+				if ( event.touches.length < 2 ) return;
+				const dx = event.touches[ 1 ].pageX - event.touches[ 0 ].pageX;
+				const dy = event.touches[ 1 ].pageY - event.touches[ 0 ].pageY;
+				const distance = Math.hypot( dx, dy );
+				const currentAngle = Math.atan2( dy, dx );
+
+				// Evita instabilidade trigonométrica caso os dois dedos se encostem
+				if ( distance < TWIST_MIN_DISTANCE ) {
+
+					twistStartAngle = currentAngle;
+					return;
+
+				}
+
+				let angleDelta = currentAngle - twistStartAngle;
+				if ( angleDelta > Math.PI ) angleDelta -= 2 * Math.PI;
+				if ( angleDelta < - Math.PI ) angleDelta += 2 * Math.PI;
+				twistStartAngle = currentAngle;
+
+				// Limita picos espúrios de hardware em troca de IDs capacitivos
+				angleDelta = Math.max( - 0.25, Math.min( 0.25, angleDelta ) );
+
+				if ( ! twistUnlocked ) {
+
+					twistAccumulated += angleDelta;
+					if ( Math.abs( twistAccumulated ) < TWIST_UNLOCK_RAD ) {
+
+						return;
+
+					}
+					twistUnlocked = true;
+					const excess = twistAccumulated - Math.sign( twistAccumulated ) * TWIST_UNLOCK_RAD;
+					rotateLeft( - excess * scope.twistRotateSpeed * twistDirectionSign );
+					return;
+
+				}
+
+				rotateLeft( - angleDelta * scope.twistRotateSpeed * twistDirectionSign );
 
 			}
 
@@ -677,13 +845,19 @@
 
 				if ( scope.enableZoom ) handleTouchMoveDolly( event );
 				if ( scope.enablePan ) handleTouchMovePan( event );
+				if ( scope.enableRotate && scope.enableTwistRotate ) handleTouchMoveTwist( event );
 
 			}
 
 			function handleTouchMoveDollyRotate( event ) {
 
 				if ( scope.enableZoom ) handleTouchMoveDolly( event );
-				if ( scope.enableRotate ) handleTouchMoveRotate( event );
+				if ( scope.enableRotate ) {
+
+					handleTouchMoveRotate( event );
+					if ( scope.enableTwistRotate ) handleTouchMoveTwist( event );
+
+				}
 
 			}
 
@@ -878,63 +1052,84 @@
 
 			}
 
+			/**
+			 * Sincroniza perfeitamente o estado dos controles com o número de dedos ativos na tela,
+			 * evitando travamentos ("efeito estático") ao adicionar ou levantar um dos dedos (1 <-> 2 dedos).
+			 */
+			function syncTouchState( event ) {
+
+				const touchCount = event.touches ? event.touches.length : 0;
+
+				if ( touchCount === 1 ) {
+
+					switch ( scope.touches.ONE ) {
+
+						case THREE.TOUCH.ROTATE:
+							if ( scope.enableRotate === false ) { state = STATE.NONE; return; }
+							handleTouchStartRotate( event );
+							state = STATE.TOUCH_ROTATE;
+							break;
+
+						case THREE.TOUCH.PAN:
+							if ( scope.enablePan === false ) { state = STATE.NONE; return; }
+							handleTouchStartPan( event );
+							state = STATE.TOUCH_PAN;
+							break;
+
+						default:
+							state = STATE.NONE;
+
+					}
+
+				} else if ( touchCount >= 2 ) {
+
+					switch ( scope.touches.TWO ) {
+
+						case THREE.TOUCH.DOLLY_PAN:
+							if ( scope.enableZoom === false && scope.enablePan === false && ! ( scope.enableRotate && scope.enableTwistRotate ) ) {
+
+								state = STATE.NONE;
+								return;
+
+							}
+							handleTouchStartDollyPan( event );
+							state = STATE.TOUCH_DOLLY_PAN;
+							break;
+
+						case THREE.TOUCH.DOLLY_ROTATE:
+							if ( scope.enableZoom === false && scope.enableRotate === false ) {
+
+								state = STATE.NONE;
+								return;
+
+							}
+							handleTouchStartDollyRotate( event );
+							state = STATE.TOUCH_DOLLY_ROTATE;
+							break;
+
+						default:
+							state = STATE.NONE;
+
+					}
+
+				} else {
+
+					state = STATE.NONE;
+
+				}
+
+			}
+
 			function onTouchStart( event ) {
 
 				if ( scope.enabled === false ) return;
 				event.preventDefault(); // prevent scrolling
 
-				switch ( event.touches.length ) {
+				const wasIdle = ( state === STATE.NONE );
+				lastTouchMoveTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+				syncTouchState( event );
 
-					case 1:
-						switch ( scope.touches.ONE ) {
-
-							case THREE.TOUCH.ROTATE:
-								if ( scope.enableRotate === false ) return;
-								handleTouchStartRotate( event );
-								state = STATE.TOUCH_ROTATE;
-								break;
-
-							case THREE.TOUCH.PAN:
-								if ( scope.enablePan === false ) return;
-								handleTouchStartPan( event );
-								state = STATE.TOUCH_PAN;
-								break;
-
-							default:
-								state = STATE.NONE;
-
-						}
-
-						break;
-
-					case 2:
-						switch ( scope.touches.TWO ) {
-
-							case THREE.TOUCH.DOLLY_PAN:
-								if ( scope.enableZoom === false && scope.enablePan === false ) return;
-								handleTouchStartDollyPan( event );
-								state = STATE.TOUCH_DOLLY_PAN;
-								break;
-
-							case THREE.TOUCH.DOLLY_ROTATE:
-								if ( scope.enableZoom === false && scope.enableRotate === false ) return;
-								handleTouchStartDollyRotate( event );
-								state = STATE.TOUCH_DOLLY_ROTATE;
-								break;
-
-							default:
-								state = STATE.NONE;
-
-						}
-
-						break;
-
-					default:
-						state = STATE.NONE;
-
-				}
-
-				if ( state !== STATE.NONE ) {
+				if ( wasIdle && state !== STATE.NONE ) {
 
 					scope.dispatchEvent( _startEvent );
 
@@ -947,30 +1142,45 @@
 				if ( scope.enabled === false ) return;
 				event.preventDefault(); // prevent scrolling
 
+				const touchCount = event.touches ? event.touches.length : 0;
+				if ( touchCount === 0 ) return;
+
+				// Caso a contagem de dedos tenha mudado sem disparar touchstart/touchend no WebKit, ressincroniza sem saltos
+				const isSingleState = ( state === STATE.TOUCH_ROTATE || state === STATE.TOUCH_PAN );
+				const isMultiState = ( state === STATE.TOUCH_DOLLY_PAN || state === STATE.TOUCH_DOLLY_ROTATE );
+				if ( ( isSingleState && touchCount >= 2 ) || ( isMultiState && touchCount === 1 ) || state === STATE.NONE ) {
+
+					syncTouchState( event );
+					return;
+
+				}
+
+				lastTouchMoveTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+
 				switch ( state ) {
 
 					case STATE.TOUCH_ROTATE:
 						if ( scope.enableRotate === false ) return;
 						handleTouchMoveRotate( event );
-						scope.update();
+						if ( ! scope.enableDamping ) scope.update();
 						break;
 
 					case STATE.TOUCH_PAN:
 						if ( scope.enablePan === false ) return;
 						handleTouchMovePan( event );
-						scope.update();
+						if ( ! scope.enableDamping ) scope.update();
 						break;
 
 					case STATE.TOUCH_DOLLY_PAN:
-						if ( scope.enableZoom === false && scope.enablePan === false ) return;
+						if ( scope.enableZoom === false && scope.enablePan === false && ! ( scope.enableRotate && scope.enableTwistRotate ) ) return;
 						handleTouchMoveDollyPan( event );
-						scope.update();
+						if ( ! scope.enableDamping ) scope.update();
 						break;
 
 					case STATE.TOUCH_DOLLY_ROTATE:
 						if ( scope.enableZoom === false && scope.enableRotate === false ) return;
 						handleTouchMoveDollyRotate( event );
-						scope.update();
+						if ( ! scope.enableDamping ) scope.update();
 						break;
 
 					default:
@@ -984,8 +1194,37 @@
 
 				if ( scope.enabled === false ) return;
 				handleTouchEnd( event );
+
+				// Se ainda restar dedo(s) na tela (ex.: transição de 2 dedos -> 1 dedo), mantém navegação contínua!
+				if ( event.touches && event.touches.length > 0 ) {
+
+					syncTouchState( event );
+					return;
+
+				}
+
+				// Se o usuário parou os dedos antes de soltar (> 95ms), reduz inércia residual para parada precisa;
+				// caso solte em movimento (flick), mantém 100% da inércia suave.
+				const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+				if ( scope.enableDamping && ( now - lastTouchMoveTime ) > 95 ) {
+
+					sphericalDelta.theta *= 0.25;
+					sphericalDelta.phi *= 0.25;
+					panOffset.multiplyScalar( 0.25 );
+					zoomDelta *= 0.25;
+
+				}
+
 				scope.dispatchEvent( _endEvent );
 				state = STATE.NONE;
+
+			}
+
+			function onTouchCancel( ) {
+
+				if ( scope.enabled === false ) return;
+				state = STATE.NONE;
+				scope.dispatchEvent( _endEvent );
 
 			}
 
@@ -1006,6 +1245,7 @@
 				passive: false
 			} );
 			scope.domElement.addEventListener( 'touchend', onTouchEnd );
+			scope.domElement.addEventListener( 'touchcancel', onTouchCancel );
 			scope.domElement.addEventListener( 'touchmove', onTouchMove, {
 				passive: false
 			} ); // force an update at start

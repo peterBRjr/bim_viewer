@@ -1,6 +1,7 @@
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -230,6 +231,11 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
               // Viewport WebGL via InAppWebView com proteção contra queda do processo (onRenderProcessGone)
               InAppWebView(
                 key: ValueKey('bim_webview_$_webViewRecreationId'),
+                gestureRecognizers: {
+                  Factory<OneSequenceGestureRecognizer>(
+                    () => EagerGestureRecognizer(),
+                  ),
+                },
                 initialUrlRequest: URLRequest(
                   url: WebUri('http://localhost:8080/index.html'),
                 ),
@@ -239,7 +245,10 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                   allowUniversalAccessFromFileURLs: true,
                   isInspectable: kDebugMode,
                   transparentBackground: true,
-                  supportZoom: true,
+                  supportZoom: false,
+                  disableVerticalScroll: true,
+                  disableHorizontalScroll: true,
+                  disallowOverScroll: true,
                   mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
                   useWideViewPort: true,
                   loadWithOverviewMode: true,

@@ -14,10 +14,21 @@ function initCameraAndControls(container) {
 
   state.controls = new THREE.OrbitControls(state.camera, state.renderer.domElement);
   state.controls.enableDamping = true;
-  state.controls.dampingFactor = 0.08;
+  state.controls.dampingFactor = 0.115;
+  state.controls.rotateSpeed = 0.92;
+  state.controls.enableTwistRotate = true;
+  state.controls.twistRotateSpeed = 1.15;
+  state.controls.zoomSpeed = 1.12;
+  state.controls.panSpeed = 0.95;
   state.controls.screenSpacePanning = true;
+  state.controls.minPolarAngle = 0.02;
+  state.controls.maxPolarAngle = Math.PI * 0.96;
   state.controls.minDistance = 0.5;
   state.controls.maxDistance = 500;
+  state.controls.touches = {
+    ONE: THREE.TOUCH.ROTATE,
+    TWO: THREE.TOUCH.DOLLY_PAN,
+  };
   state.controls.target.copy(state.initialCameraTarget);
 
   // Cancela animações em curso imediatamente ao toque para dar resposta instantânea ao usuário
@@ -58,6 +69,9 @@ function animatePivotTo(targetLookAt, durationMs = 240) {
   if (state.pivotAnimFrame) {
     cancelAnimationFrame(state.pivotAnimFrame);
     state.pivotAnimFrame = null;
+  }
+  if (typeof state.controls.stopInertia === 'function') {
+    state.controls.stopInertia();
   }
 
   const startTarget = state.controls.target.clone();
@@ -129,6 +143,9 @@ function animateCameraTo(targetPos, targetLookAt, durationMs = 360) {
   if (state.cameraAnimFrame) {
     cancelAnimationFrame(state.cameraAnimFrame);
     state.cameraAnimFrame = null;
+  }
+  if (typeof state.controls.stopInertia === 'function') {
+    state.controls.stopInertia();
   }
 
   const startPos = state.camera.position.clone();
@@ -235,6 +252,9 @@ function fitModelToFrame(modelGroup) {
   }
 
   if (state.controls) {
+    if (typeof state.controls.stopInertia === 'function') {
+      state.controls.stopInertia();
+    }
     state.controls.minDistance = Math.max(0.2, Math.min(1.0, maxDim * 0.005));
     state.controls.maxDistance = Math.max(500, cameraZ * 5, maxDim * 6);
   }
