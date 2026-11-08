@@ -267,3 +267,4 @@ window.animateCameraTo = animateCameraTo;
 window.resetCamera = resetCamera;
 window.setCameraView = setCameraView;
 window.fitModelToFrame = fitModelToFrame;
+

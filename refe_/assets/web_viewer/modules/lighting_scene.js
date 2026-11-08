@@ -90,3 +90,4 @@ function initScene(container) {
 // Exportações
 window.BimEngine.initScene = initScene;
 window.initScene = initScene;
+

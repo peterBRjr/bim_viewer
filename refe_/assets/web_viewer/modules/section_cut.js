@@ -34,3 +34,4 @@ function setSectionCut(enabled, ratio = 1.0) {
 // Exportações
 window.BimEngine.setSectionCut = setSectionCut;
 window.setSectionCut = setSectionCut;
+

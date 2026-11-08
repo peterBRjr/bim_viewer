@@ -362,3 +362,4 @@ window.buildHierarchyMaps = buildHierarchyMaps;
 window.deduceBimCategory = deduceBimCategory;
 window.selectElement = selectElement;
 window.clearSelection = clearSelection;
+

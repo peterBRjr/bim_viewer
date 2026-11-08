@@ -279,3 +279,4 @@ window.showElement = showElement;
 window.isolateElement = isolateElement;
 window.restoreAllVisibility = restoreAllVisibility;
 window.previewHiddenElements = previewHiddenElements;
+

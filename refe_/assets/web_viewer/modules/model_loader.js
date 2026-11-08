@@ -576,3 +576,4 @@ window.loadBimModelFromUrl = loadBimModelFromUrl;
 window.loadBimModel = loadBimModel;
 window.loadGltfModel = loadGltfModel;
 window.loadIfcModel = loadIfcModel;
+

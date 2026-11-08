@@ -377,3 +377,4 @@ window.setMeasureMode = setMeasureMode;
 window.setMeasureSubMode = setMeasureSubMode;
 window.clearMeasurements = clearMeasurements;
 window.removeLastMeasurement = removeLastMeasurement;
+

@@ -177,3 +177,4 @@ window.getArchitecturalBumpTexture = getArchitecturalBumpTexture;
 window.createBimArchitecturalMaterial = createBimArchitecturalMaterial;
 window.weldLosslessGeometry = weldLosslessGeometry;
 window.createBoxLodGeometryData = createBoxLodGeometryData;
+
