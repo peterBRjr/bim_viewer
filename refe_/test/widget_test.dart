@@ -456,4 +456,109 @@ void main() {
       expect(controller.isLoading, isTrue);
     });
   });
+
+  group('Viewer3dJsBridge & Clean Architecture Refactoring Tests', () {
+    test('Viewer3dJsBridgeListener events update controller state cleanly', () {
+      final controller = Viewer3DController();
+
+      // Inicialmente não está pronto
+      expect(controller.isViewerReady, isFalse);
+      expect(controller.isLoading, isTrue);
+
+      // Dispara onViewerReady via listener
+      controller.onViewerReady();
+      expect(controller.isViewerReady, isTrue);
+      expect(controller.isLoading, isFalse);
+
+      // Dispara onLoadingProgress
+      controller.onLoadingProgress(45.0);
+      expect(controller.loadingProgress, 45.0);
+      expect(controller.isLoading, isTrue);
+
+      // Dispara onElementSelected
+      const metadata = BimElementMetadata(
+        expressID: 550,
+        name: 'Parede básica:Alvenaria 15cm:550',
+        category: 'IfcWall',
+        psets: {},
+      );
+      controller.onElementSelected(metadata);
+      expect(controller.selectedElement, isNotNull);
+      expect(controller.selectedElement?.expressID, 550);
+      expect(controller.selectedElement?.friendlyCategory, 'Parede');
+      expect(controller.selectedElement?.cleanTitle, 'Alvenaria 15cm');
+      expect(controller.selectedElement?.familyName, 'Parede básica');
+
+      // Dispara onElementDeselected
+      controller.onElementDeselected();
+      expect(controller.selectedElement, isNull);
+
+      // Dispara onVisibilityChanged
+      controller.onVisibilityChanged(isIsolated: true, isolatedId: 550);
+      expect(controller.isIsolated, isTrue);
+      expect(controller.isolatedElementId, 550);
+      expect(controller.isElementIsolated(550), isTrue);
+
+      controller.onVisibilityChanged(isIsolated: false, isolatedId: null);
+      expect(controller.isIsolated, isFalse);
+      expect(controller.isolatedElementId, isNull);
+
+      // Dispara medições via listener
+      controller.onMeasureModeChanged(enabled: true, mode: 'point_to_point');
+      expect(controller.isMeasureMode, isTrue);
+      expect(controller.measureSubMode, 'point_to_point');
+
+      controller.onMeasurementWaitingPoint(isWaiting: true, message: 'Selecione ponto B');
+      expect(controller.isWaitingSecondPoint, isTrue);
+      expect(controller.measureStatusMessage, 'Selecione ponto B');
+
+      final meas = MeasurementModel.fromMap({
+        'id': 'meas_1',
+        'distance': 5.2,
+        'type': 'point_to_point',
+        'label': 'Distância: 5,20 m',
+        'startPoint': {'x': 0.0, 'y': 0.0, 'z': 0.0},
+        'endPoint': {'x': 5.2, 'y': 0.0, 'z': 0.0},
+        'deltaX': 5.2,
+        'deltaY': 0.0,
+        'deltaZ': 0.0,
+      });
+      controller.onMeasurementCreated(meas);
+      expect(controller.hasMeasurements, isTrue);
+      expect(controller.measurementCount, 1);
+      expect(controller.lastMeasurement?.distance, 5.2);
+      expect(controller.isWaitingSecondPoint, isFalse);
+
+      controller.onMeasurementRemoved();
+      expect(controller.hasMeasurements, isFalse);
+
+      // Dispara erro
+      controller.onViewerError('Erro de WebGL');
+      expect(controller.errorMessage, 'Erro de WebGL');
+      expect(controller.isLoading, isFalse);
+    });
+
+    test('BimElementMetadata string decoding and metric extraction', () {
+      final decoded = BimElementMetadata.decodeIfcString(r'Laje de Concreto \X\E7\X\E3o');
+      expect(decoded, 'Laje de Concreto ção');
+
+      const metadata = BimElementMetadata(
+        expressID: 99,
+        name: 'Telhado',
+        category: 'IfcRoof',
+        psets: {
+          'Dimensões': {
+            'Área': '150.50',
+            'Volume': '45.2',
+            'Inclinação': '30',
+          }
+        },
+      );
+
+      final metrics = metadata.keyMetrics;
+      expect(metrics['Área Total'], '150,50 m²');
+      expect(metrics['Volume'], '45,20 m³');
+      expect(metrics['Caimento'], '30°');
+    });
+  });
 }

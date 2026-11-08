@@ -2,188 +2,21 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../../core/services/localhost_server_service.dart';
+import '../../data/services/viewer_3d_js_bridge.dart';
+import '../../domain/models/bim_element_metadata.dart';
 import '../../domain/models/measurement_model.dart';
 
-/// Metadados de um elemento BIM selecionado via Raycaster na Viewport 3D.
-class BimElementMetadata {
-  final int expressID;
-  final String name;
-  final String category;
-  final Map<String, dynamic> psets;
-  final List<int> subIds;
-  final bool isComposite;
+export '../../domain/models/bim_element_metadata.dart';
 
-  const BimElementMetadata({
-    required this.expressID,
-    required this.name,
-    required this.category,
-    required this.psets,
-    this.subIds = const [],
-    this.isComposite = false,
-  });
-
-  factory BimElementMetadata.fromMap(Map<String, dynamic> map) {
-    final subIdsRaw = (map['subIds'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
-    return BimElementMetadata(
-      expressID: (map['expressID'] as num?)?.toInt() ?? 0,
-      name: map['name']?.toString() ?? 'Elemento Desconhecido',
-      category: map['category']?.toString() ?? 'IfcBuildingElementProxy',
-      psets: (map['psets'] as Map?)?.cast<String, dynamic>() ?? {},
-      subIds: subIdsRaw,
-      isComposite: map['isComposite'] == true || subIdsRaw.length > 1,
-    );
-  }
-
-  /// Decodifica caracteres ISO-10303-21 comuns do Revit (ex: \X\E7 -> ç, \X\ED -> í)
-  static String decodeIfcString(String text) {
-    if (!text.contains(r'\X\') && !text.contains(r'\X2\')) return text;
-    var result = text;
-    final Map<String, String> ifcMap = {
-      r'\X\E1': 'á', r'\X\E9': 'é', r'\X\ED': 'í', r'\X\F3': 'ó', r'\X\FA': 'ú',
-      r'\X\E3': 'ã', r'\X\F5': 'õ', r'\X\E2': 'â', r'\X\EA': 'ê', r'\X\F4': 'ô',
-      r'\X\E7': 'ç', r'\X\C1': 'Á', r'\X\C9': 'É', r'\X\CD': 'Í', r'\X\D3': 'Ó',
-      r'\X\DA': 'Ú', r'\X\C3': 'Ã', r'\X\D5': 'Õ', r'\X\C2': 'Â', r'\X\CA': 'Ê',
-      r'\X\D4': 'Ô', r'\X\C7': 'Ç', r'\X\AA': 'ª', r'\X\BA': 'º', r'\X\E0': 'à',
-      r'\X\C0': 'À',
-    };
-    ifcMap.forEach((key, val) {
-      result = result.replaceAll(key, val);
-    });
-    return result;
-  }
-
-  /// Retorna o nome amigável e limpo para visualização na maquete de bolso.
-  String get displayName => cleanTitle;
-
-  /// Extrai o nome do tipo limpo (ex: "Telhado básico:Telhado ventilado - Concreto:331235" -> "Telhado ventilado - Concreto")
-  String get cleanTitle {
-    final decoded = decodeIfcString(name).trim();
-    if (decoded.isEmpty || decoded == 'null') {
-      return '$friendlyCategory #$expressID';
-    }
-    final withoutBrackets = decoded.replaceAll(RegExp(r'\s*\[\d+\]$'), '');
-    if (withoutBrackets.contains(':')) {
-      final parts = withoutBrackets.split(':').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-      if (parts.length >= 2 && !RegExp(r'^\d+$').hasMatch(parts[1])) {
-        return parts[1];
-      }
-      return parts[0];
-    }
-    return withoutBrackets;
-  }
-
-  /// Família / Categoria do Revit (ex: "Telhado básico", "Parede básica")
-  String? get familyName {
-    final decoded = decodeIfcString(name).trim();
-    if (decoded.contains(':')) {
-      final parts = decoded.split(':').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-      if (parts.length >= 2 && !RegExp(r'^\d+$').hasMatch(parts[1])) {
-        return parts[0];
-      }
-    }
-    return null;
-  }
-
-  /// Tradução amigável da categoria IFC para português.
-  String get friendlyCategory {
-    final cat = category.toLowerCase();
-    if (cat.contains('wall') || cat.contains('parede')) return 'Parede';
-    if (cat.contains('door') || cat.contains('porta')) return 'Porta';
-    if (cat.contains('window') || cat.contains('janela')) return 'Janela';
-    if (cat.contains('slab') || cat.contains('laje') || cat.contains('piso') || cat.contains('floor')) return 'Laje / Piso';
-    if (cat.contains('column') || cat.contains('pilar') || cat.contains('coluna')) return 'Pilar';
-    if (cat.contains('beam') || cat.contains('viga')) return 'Viga';
-    if (cat.contains('roof') || cat.contains('telhado')) return 'Telhado';
-    if (cat.contains('stair') || cat.contains('escada')) return 'Escada';
-    if (cat.contains('railing') || cat.contains('guarda')) return 'Guarda-Corpo';
-    if (cat.contains('pipe') || cat.contains('tubo')) return 'Tubulação';
-    if (cat.contains('duct') || cat.contains('duto')) return 'Duto';
-    if (cat.contains('covering') || cat.contains('forro')) return 'Forro';
-    if (cat.contains('member')) return 'Perfil Estrutural';
-    if (cat.contains('proxy')) return 'Elemento Genérico';
-    return category.replaceAll('Ifc', '');
-  }
-
-  /// Ícone semântico representativo da categoria BIM.
-  IconData get categoryIcon {
-    final cat = category.toLowerCase();
-    if (cat.contains('wall') || cat.contains('parede')) return Icons.view_week_outlined;
-    if (cat.contains('door') || cat.contains('porta')) return Icons.meeting_room_outlined;
-    if (cat.contains('window') || cat.contains('janela')) return Icons.window_rounded;
-    if (cat.contains('slab') || cat.contains('laje') || cat.contains('piso')) return Icons.layers_outlined;
-    if (cat.contains('column') || cat.contains('pilar')) return Icons.table_chart_outlined;
-    if (cat.contains('beam') || cat.contains('viga')) return Icons.horizontal_rule_rounded;
-    if (cat.contains('roof') || cat.contains('telhado')) return Icons.roofing_rounded;
-    if (cat.contains('stair') || cat.contains('escada')) return Icons.stairs_rounded;
-    if (cat.contains('railing')) return Icons.fence_rounded;
-    return Icons.view_in_ar_rounded;
-  }
-
-  /// Formata números decimais para o padrão da construção civil brasileira (ex: 279,42 m²)
-  static String formatNumberWithUnit(dynamic val, String unit) {
-    if (val == null) return 'N/A';
-    final strVal = val.toString().trim();
-    final numVal = double.tryParse(strVal.replaceAll(',', '.'));
-    if (numVal != null) {
-      final formatted = numVal.toStringAsFixed(2).replaceAll('.', ',');
-      return '$formatted $unit';
-    }
-    return strVal.endsWith(unit) ? strVal : '$strVal $unit';
-  }
-
-  /// Extrai as métricas de obra mais úteis (Área, Volume, Dimensões, Nível, Inclinação).
-  Map<String, String> get keyMetrics {
-    final Map<String, String> metrics = {};
-
-    for (final pset in psets.values) {
-      if (pset is Map) {
-        for (final entry in pset.entries) {
-          final key = entry.key.toString().toLowerCase();
-          final val = decodeIfcString(entry.value.toString()).trim();
-
-          if (metrics.length < 4) {
-            if (key.contains('totalarea') || key == 'area' || key.contains('área')) {
-              metrics['Área Total'] = formatNumberWithUnit(val, 'm²');
-            } else if (key.contains('volume')) {
-              metrics['Volume'] = formatNumberWithUnit(val, 'm³');
-            } else if (key.contains('pitch') || key.contains('inclina')) {
-              final numVal = double.tryParse(val.replaceAll(',', '.'));
-              metrics['Caimento'] = numVal != null ? '${numVal.toStringAsFixed(0)}°' : '$val°';
-            } else if (key.contains('length') || key.contains('comprimento')) {
-              metrics['Comprimento'] = formatNumberWithUnit(val, 'm');
-            } else if (key.contains('height') || key.contains('altura')) {
-              metrics['Altura'] = formatNumberWithUnit(val, 'm');
-            } else if (key.contains('width') || key.contains('espessura') || key.contains('largura')) {
-              metrics['Espessura'] = formatNumberWithUnit(val, 'm');
-            } else if (key.contains('level') || key.contains('nível') || key.contains('pavimento')) {
-              metrics['Nível'] = val;
-            }
-          }
-        }
-      }
-    }
-
-    if (isComposite && !metrics.containsKey('Composição')) {
-      metrics['Composição'] = '${subIds.length} partes';
-    }
-
-    if (metrics.isEmpty) {
-      metrics['Elemento'] = '#$expressID';
-      metrics['Categoria'] = friendlyCategory;
-      metrics['Status'] = 'As-Built';
-    }
-
-    return metrics;
-  }
-}
-
-/// Controller reativo responsável pela ponte de comunicação (JS Bridge) entre Flutter e WebGL.
-class Viewer3DController extends ChangeNotifier {
+/// Controller reativo responsável pelo gerenciamento de estado da UI e
+/// coordenação com a Viewport 3D WebGL através do [Viewer3dJsBridge].
+class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListener {
+  final Viewer3dJsBridge _jsBridge;
   InAppWebViewController? _webViewController;
+
   bool _isViewerReady = false;
   bool _isLoading = true;
   double _loadingProgress = 0.0;
@@ -210,6 +43,9 @@ class Viewer3DController extends ChangeNotifier {
 
   String? _pendingFilePath;
   String? _pendingFormat;
+
+  Viewer3DController({Viewer3dJsBridge? jsBridge})
+      : _jsBridge = jsBridge ?? Viewer3dJsBridge();
 
   InAppWebViewController? get webViewController => _webViewController;
   bool get isViewerReady => _isViewerReady;
@@ -256,164 +92,119 @@ class Viewer3DController extends ChangeNotifier {
   /// Registra o InAppWebViewController e configura a JS Bridge bidirecional.
   void setWebViewController(InAppWebViewController controller) {
     _webViewController = controller;
-    _registerJsHandlers(controller);
+    _jsBridge.attach(controller, this);
   }
 
-  /// Registra os ouvintes nativos para chamadas originadas do JavaScript.
-  void _registerJsHandlers(InAppWebViewController controller) {
-    // 1. Notificação de inicialização da engine WebGL
-    controller.addJavaScriptHandler(
-      handlerName: 'onViewerReady',
-      callback: (args) {
-        developer.log('Engine 3D inicializada e pronta (onViewerReady)', name: 'Viewer3DController');
-        _isViewerReady = true;
-        _isLoading = false;
-        notifyListeners();
-
-        // Se havia modelo pendente antes da inicialização completa, injeta agora
-        if (_pendingFilePath != null && _pendingFormat != null) {
-          loadModelFile(_pendingFilePath!, _pendingFormat!);
-          _pendingFilePath = null;
-          _pendingFormat = null;
-        }
-      },
-    );
-
-    // 2. Progresso de decodificação e parsing do modelo
-    controller.addJavaScriptHandler(
-      handlerName: 'onLoadingProgress',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final data = (args[0] as Map).cast<String, dynamic>();
-          final progress = (data['progress'] as num?)?.toDouble() ?? 0.0;
-          _loadingProgress = progress;
-          _isLoading = progress < 100.0;
-          notifyListeners();
-        }
-      },
-    );
-
-    // 3. Inspeção técnica: elemento selecionado via toque/clique no canvas
-    controller.addJavaScriptHandler(
-      handlerName: 'onElementSelected',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final data = (args[0] as Map).cast<String, dynamic>();
-          _selectedElement = BimElementMetadata.fromMap(data);
-          notifyListeners();
-        }
-      },
-    );
-
-    // 4. Elemento deselecionado (ex: toque no fundo vazio do 3D)
-    controller.addJavaScriptHandler(
-      handlerName: 'onElementDeselected',
-      callback: (args) {
-        if (_selectedElement != null) {
-          _selectedElement = null;
-          notifyListeners();
-        }
-      },
-    );
-
-    // 5. Atualização de visibilidade consolidada (ocultação / isolamento)
-    controller.addJavaScriptHandler(
-      handlerName: 'onVisibilityChanged',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final data = (args[0] as Map).cast<String, dynamic>();
-          final isIsolated = data['isIsolated'] == true;
-          final isolatedId = (data['isolatedId'] as num?)?.toInt();
-          _isolatedElementId = isIsolated ? isolatedId : null;
-          notifyListeners();
-        }
-      },
-    );
-
-    // 6. Captura defensiva de erros na renderização WebGL
-    controller.addJavaScriptHandler(
-      handlerName: 'onViewerError',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final data = (args[0] as Map).cast<String, dynamic>();
-          _errorMessage = data['message']?.toString() ?? 'Erro desconhecido na Viewport 3D';
-          _isLoading = false;
-          notifyListeners();
-        }
-      },
-    );
-
-    // 7. Notificações do Modo de Medição de Vãos e Distâncias 3D
-    controller.addJavaScriptHandler(
-      handlerName: 'onMeasureModeChanged',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final data = (args[0] as Map).cast<String, dynamic>();
-          _isMeasureMode = data['enabled'] == true;
-          _measureSubMode = data['mode']?.toString() ?? 'span';
-          if (!_isMeasureMode) {
-            _isWaitingSecondPoint = false;
-            _measureStatusMessage = null;
-          }
-          notifyListeners();
-        }
-      },
-    );
-
-    controller.addJavaScriptHandler(
-      handlerName: 'onMeasurementCreated',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final data = (args[0] as Map).cast<String, dynamic>();
-          final measurement = MeasurementModel.fromMap(data);
-          _measurements.add(measurement);
-          _lastMeasurement = measurement;
-          _isWaitingSecondPoint = false;
-          _measureStatusMessage = measurement.isSpan
-              ? 'Vão livre detectado: ${measurement.formattedDistance}'
-              : 'Distância medida: ${measurement.formattedDistance}';
-          notifyListeners();
-        }
-      },
-    );
-
-    controller.addJavaScriptHandler(
-      handlerName: 'onMeasurementWaitingPoint',
-      callback: (args) {
-        if (args.isNotEmpty && args[0] is Map) {
-          final data = (args[0] as Map).cast<String, dynamic>();
-          final cancelled = data['cancelled'] == true;
-          _isWaitingSecondPoint = !cancelled;
-          _measureStatusMessage = cancelled ? null : data['message']?.toString();
-          notifyListeners();
-        }
-      },
-    );
-
-    controller.addJavaScriptHandler(
-      handlerName: 'onMeasurementRemoved',
-      callback: (args) {
-        if (_measurements.isNotEmpty) {
-          _measurements.removeLast();
-          _lastMeasurement = _measurements.isNotEmpty ? _measurements.last : null;
-          _isWaitingSecondPoint = false;
-          _measureStatusMessage = null;
-          notifyListeners();
-        }
-      },
-    );
-
-    controller.addJavaScriptHandler(
-      handlerName: 'onMeasurementCleared',
-      callback: (args) {
-        _measurements.clear();
-        _lastMeasurement = null;
-        _isWaitingSecondPoint = false;
-        _measureStatusMessage = null;
-        notifyListeners();
-      },
-    );
+  @override
+  void dispose() {
+    _jsBridge.detach();
+    super.dispose();
   }
+
+  // =========================================================================
+  // IMPLEMENTAÇÃO DE Viewer3dJsBridgeListener (Eventos recebidos do JS)
+  // =========================================================================
+
+  @override
+  void onViewerReady() {
+    _isViewerReady = true;
+    _isLoading = false;
+    notifyListeners();
+
+    // Se havia modelo pendente antes da inicialização completa, injeta agora
+    if (_pendingFilePath != null && _pendingFormat != null) {
+      loadModelFile(_pendingFilePath!, _pendingFormat!);
+      _pendingFilePath = null;
+      _pendingFormat = null;
+    }
+  }
+
+  @override
+  void onLoadingProgress(double progress) {
+    _loadingProgress = progress;
+    _isLoading = progress < 100.0;
+    notifyListeners();
+  }
+
+  @override
+  void onElementSelected(BimElementMetadata metadata) {
+    _selectedElement = metadata;
+    notifyListeners();
+  }
+
+  @override
+  void onElementDeselected() {
+    if (_selectedElement != null) {
+      _selectedElement = null;
+      notifyListeners();
+    }
+  }
+
+  @override
+  void onVisibilityChanged({required bool isIsolated, int? isolatedId}) {
+    _isolatedElementId = isIsolated ? isolatedId : null;
+    notifyListeners();
+  }
+
+  @override
+  void onViewerError(String message) {
+    _errorMessage = message;
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  @override
+  void onMeasureModeChanged({required bool enabled, required String mode}) {
+    _isMeasureMode = enabled;
+    _measureSubMode = mode;
+    if (!_isMeasureMode) {
+      _isWaitingSecondPoint = false;
+      _measureStatusMessage = null;
+    }
+    notifyListeners();
+  }
+
+  @override
+  void onMeasurementCreated(MeasurementModel measurement) {
+    _measurements.add(measurement);
+    _lastMeasurement = measurement;
+    _isWaitingSecondPoint = false;
+    _measureStatusMessage = measurement.isSpan
+        ? 'Vão livre detectado: ${measurement.formattedDistance}'
+        : 'Distância medida: ${measurement.formattedDistance}';
+    notifyListeners();
+  }
+
+  @override
+  void onMeasurementWaitingPoint({required bool isWaiting, String? message}) {
+    _isWaitingSecondPoint = isWaiting;
+    _measureStatusMessage = message;
+    notifyListeners();
+  }
+
+  @override
+  void onMeasurementRemoved() {
+    if (_measurements.isNotEmpty) {
+      _measurements.removeLast();
+      _lastMeasurement = _measurements.isNotEmpty ? _measurements.last : null;
+      _isWaitingSecondPoint = false;
+      _measureStatusMessage = null;
+      notifyListeners();
+    }
+  }
+
+  @override
+  void onMeasurementCleared() {
+    _measurements.clear();
+    _lastMeasurement = null;
+    _isWaitingSecondPoint = false;
+    _measureStatusMessage = null;
+    notifyListeners();
+  }
+
+  // =========================================================================
+  // COMANDOS DE AÇÃO (FLUTTER -> JS BRIDGE)
+  // =========================================================================
 
   /// Realiza streaming HTTP local (ou leitura direta) e injeta o modelo BIM no motor WebGL via JS.
   Future<void> loadModelFile(String filePath, String format) async {
@@ -436,7 +227,7 @@ class Viewer3DController extends ChangeNotifier {
     _renderProcessCrashed = false;
     notifyListeners();
 
-    if (!_isViewerReady || _webViewController == null) {
+    if (!_isViewerReady || !_jsBridge.isAttached) {
       developer.log('Viewer ainda não está pronto. Enfileirando carregamento de: $filePath', name: 'Viewer3DController');
       _pendingFilePath = filePath;
       _pendingFormat = format;
@@ -450,9 +241,7 @@ class Viewer3DController extends ChangeNotifier {
       if (isRemoteUrl) {
         _loadingProgress = 12.0;
         notifyListeners();
-        await _webViewController?.evaluateJavascript(
-          source: 'window.loadBimModelFromUrl(${jsonEncode(filePath)}, ${jsonEncode(cleanFormat)});',
-        );
+        await _jsBridge.loadModelFromUrl(filePath, cleanFormat);
         return;
       }
 
@@ -467,9 +256,7 @@ class Viewer3DController extends ChangeNotifier {
       // Prioriza streaming HTTP local 100% offline para evitar estouro de memória/IPC em modelos grandes (ex: 90+ MB)
       final streamUrl = await LocalhostServerService.registerModelFile(filePath);
       if (streamUrl != null) {
-        await _webViewController?.evaluateJavascript(
-          source: 'window.loadBimModelFromUrl(${jsonEncode(streamUrl)}, ${jsonEncode(cleanFormat)});',
-        );
+        await _jsBridge.loadModelFromUrl(streamUrl, cleanFormat);
         return;
       }
 
@@ -480,9 +267,7 @@ class Viewer3DController extends ChangeNotifier {
       _loadingProgress = 35.0;
       notifyListeners();
 
-      await _webViewController?.evaluateJavascript(
-        source: 'window.loadBimModel("$base64Data", "$cleanFormat");',
-      );
+      await _jsBridge.loadModelBase64(base64Data, cleanFormat);
     } catch (e, stack) {
       developer.log('Falha ao carregar modelo no visualizador 3D', error: e, stackTrace: stack, name: 'Viewer3DController');
       _errorMessage = 'Falha ao carregar modelo: ${e.toString()}';
@@ -495,29 +280,21 @@ class Viewer3DController extends ChangeNotifier {
   Future<void> resetCamera() async {
     _currentCameraView = 'iso';
     notifyListeners();
-    if (_webViewController != null) {
-      await _webViewController?.evaluateJavascript(source: 'window.resetCamera();');
-    }
+    await _jsBridge.resetCamera();
   }
 
   /// Altera o ângulo da câmera para vistas técnicas predefinidas estilo ViewCube ('iso', 'top', 'front', 'right', 'left', 'back').
   Future<void> setCameraView(String view) async {
     _currentCameraView = view.toLowerCase();
     notifyListeners();
-    if (_webViewController != null) {
-      await _webViewController?.evaluateJavascript(
-        source: 'window.setCameraView(${jsonEncode(_currentCameraView)});',
-      );
-    }
+    await _jsBridge.setCameraView(_currentCameraView);
   }
 
   /// Alterna o Plano de Corte Horizontal (Section Cut estilo BIM 360 / Fusion).
   Future<void> toggleSectionCut() async {
     _isSectionCutActive = !_isSectionCutActive;
     notifyListeners();
-    await _webViewController?.evaluateJavascript(
-      source: 'window.setSectionCut($_isSectionCutActive, $_sectionCutRatio);',
-    );
+    await _jsBridge.setSectionCut(_isSectionCutActive, _sectionCutRatio);
   }
 
   /// Atualiza a altura percentual (0.05 a 1.0) do Plano de Corte Horizontal em tempo real.
@@ -527,9 +304,7 @@ class Viewer3DController extends ChangeNotifier {
       _isSectionCutActive = true;
     }
     notifyListeners();
-    await _webViewController?.evaluateJavascript(
-      source: 'window.setSectionCut(true, $_sectionCutRatio);',
-    );
+    await _jsBridge.setSectionCut(true, _sectionCutRatio);
   }
 
   /// Intercepta quedas do processo de renderização da WebView (ex: OOM do Android) evitando que o app feche.
@@ -569,9 +344,7 @@ class Viewer3DController extends ChangeNotifier {
     _selectedElement = null;
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.hideElement(${element.expressID});',
-    );
+    await _jsBridge.hideElement(element.expressID);
     return element;
   }
 
@@ -584,9 +357,7 @@ class Viewer3DController extends ChangeNotifier {
     }
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.showElement($expressID);',
-    );
+    await _jsBridge.showElement(expressID);
   }
 
   /// Isola o elemento selecionado, ocultando todos os outros elementos da cena 3D.
@@ -601,9 +372,7 @@ class Viewer3DController extends ChangeNotifier {
     }
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.isolateElement($id);',
-    );
+    await _jsBridge.isolateElement(id);
   }
 
   /// Restaura a visibilidade completa do modelo (desfaz isolamentos e ocultações).
@@ -614,9 +383,7 @@ class Viewer3DController extends ChangeNotifier {
     _isGhostPreviewActive = false;
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.restoreAllVisibility();',
-    );
+    await _jsBridge.restoreAllVisibility();
   }
 
   /// Ativa ou desativa a pré-visualização translúcida fantasma (raio-X) dos elementos ocultos no 3D.
@@ -624,9 +391,7 @@ class Viewer3DController extends ChangeNotifier {
     _isGhostPreviewActive = active;
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.previewHiddenElements($active);',
-    );
+    await _jsBridge.previewHiddenElements(active);
   }
 
   /// Limpa a seleção do elemento atual sincronizando com o JavaScript.
@@ -634,9 +399,7 @@ class Viewer3DController extends ChangeNotifier {
     _selectedElement = null;
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.clearSelection();',
-    );
+    await _jsBridge.clearSelection();
   }
 
   /// Alterna entre ativar e desativar o Modo de Medição de Vãos Livres
@@ -655,9 +418,7 @@ class Viewer3DController extends ChangeNotifier {
     }
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.setMeasureMode($enabled, "$mode");',
-    );
+    await _jsBridge.setMeasureMode(enabled, mode: mode);
   }
 
   /// Alterna o submodo de medição ('span' = vão livre 1 toque, 'point_to_point' = 2 toques)
@@ -666,9 +427,7 @@ class Viewer3DController extends ChangeNotifier {
     _isWaitingSecondPoint = false;
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.setMeasureSubMode("$mode");',
-    );
+    await _jsBridge.setMeasureSubMode(mode);
   }
 
   /// Limpa todas as medições e cotas ativas na cena 3D
@@ -683,9 +442,7 @@ class Viewer3DController extends ChangeNotifier {
     _renderProcessCrashed = false;
     notifyListeners();
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.clearMeasurements();',
-    );
+    await _jsBridge.clearMeasurements();
   }
 
   /// Remove a última medição realizada (ação de desfazer)
@@ -697,8 +454,6 @@ class Viewer3DController extends ChangeNotifier {
       notifyListeners();
     }
 
-    await _webViewController?.evaluateJavascript(
-      source: 'window.removeLastMeasurement();',
-    );
+    await _jsBridge.removeLastMeasurement();
   }
 }

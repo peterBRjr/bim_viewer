@@ -65,6 +65,7 @@ flutter:
 
   assets:
     - assets/web_viewer/
+    - assets/web_viewer/modules/
     - assets/web_viewer/wasm/
     - assets/models/
 
