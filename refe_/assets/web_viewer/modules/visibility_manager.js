@@ -261,6 +261,7 @@ function restoreAllVisibility() {
 function previewHiddenElements(enable) {
   state.isPreviewingHidden = Boolean(enable);
   updateGhostSubset();
+  if (typeof requestRender === 'function') requestRender(4);
 }
 
 // Exportações

@@ -31,7 +31,8 @@ function initCameraAndControls(container) {
   };
   state.controls.target.copy(state.initialCameraTarget);
 
-  // Cancela animações em curso imediatamente ao toque para dar resposta instantânea ao usuário
+  // Cancela animações em curso imediatamente ao toque e ajusta resolução dinâmica em modelos pesados
+  let restoreDprTimer = null;
   state.controls.addEventListener('start', () => {
     if (state.cameraAnimFrame) {
       cancelAnimationFrame(state.cameraAnimFrame);
@@ -40,6 +41,33 @@ function initCameraAndControls(container) {
     if (state.pivotAnimFrame) {
       cancelAnimationFrame(state.pivotAnimFrame);
       state.pivotAnimFrame = null;
+    }
+    if (state.isLowSpecDevice && state.isHeavyModel && state.renderer) {
+      if (restoreDprTimer) {
+        clearTimeout(restoreDprTimer);
+        restoreDprTimer = null;
+      }
+      state.renderer.setPixelRatio(Math.min(state.basePixelRatio || 1, 1.0));
+    }
+    if (typeof requestRender === 'function') requestRender(6);
+  });
+
+  state.controls.addEventListener('change', () => {
+    if (typeof requestRender === 'function') requestRender(3);
+  });
+
+  state.controls.addEventListener('end', () => {
+    if (state.isLowSpecDevice && state.isHeavyModel && state.renderer) {
+      if (restoreDprTimer) clearTimeout(restoreDprTimer);
+      restoreDprTimer = setTimeout(() => {
+        restoreDprTimer = null;
+        if (state.renderer) {
+          state.renderer.setPixelRatio(state.basePixelRatio || 1.25);
+          if (typeof requestRender === 'function') requestRender(4);
+        }
+      }, 220);
+    } else if (typeof requestRender === 'function') {
+      requestRender(6);
     }
   });
 }

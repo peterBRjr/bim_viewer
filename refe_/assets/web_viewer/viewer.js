@@ -64,16 +64,30 @@ function onWindowResize() {
   state.camera.aspect = w / h;
   state.camera.updateProjectionMatrix();
   state.renderer.setSize(w, h);
+  if (typeof requestRender === 'function') requestRender(4);
 }
 
 /**
- * Loop contínuo de renderização a 60 FPS com damping
+ * Loop inteligente de renderização sob demanda (On-Demand + 60 FPS em movimento):
+ * Renderiza a 60 FPS contínuos durante rotação, inércia de damping ou animações, e adormece a GPU
+ * quando a cena está estática — liberando 100% de fluidez para a interface Flutter em tablets de 4 GB RAM.
  */
 function animate() {
   requestAnimationFrame(animate);
-  if (state.controls) state.controls.update();
-  if (state.renderer && state.scene && state.camera) {
-    state.renderer.render(state.scene, state.camera);
+  const controlsMoved = state.controls ? state.controls.update() : false;
+  const isAnimating = Boolean(
+    state.cameraAnimFrame ||
+    state.pivotAnimFrame ||
+    state.isTransitioningElement
+  );
+
+  if (controlsMoved || isAnimating || state.renderFramesRemaining > 0) {
+    if (state.renderFramesRemaining > 0 && !controlsMoved && !isAnimating) {
+      state.renderFramesRemaining--;
+    }
+    if (state.renderer && state.scene && state.camera) {
+      state.renderer.render(state.scene, state.camera);
+    }
   }
 }
 

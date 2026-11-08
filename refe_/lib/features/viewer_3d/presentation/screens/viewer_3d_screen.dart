@@ -295,9 +295,11 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                           _controller.setWebViewController(webViewController);
                         },
                         onConsoleMessage: (controller, consoleMessage) {
-                          debugPrint(
-                            '[WebView Console] ${consoleMessage.messageLevel}: ${consoleMessage.message}',
-                          );
+                          if (kDebugMode) {
+                            debugPrint(
+                              '[WebView Console] ${consoleMessage.messageLevel}: ${consoleMessage.message}',
+                            );
+                          }
                         },
                         onReceivedError: (controller, request, error) {
                           debugPrint('[WebView Error] ${request.url} - ${error.description}');

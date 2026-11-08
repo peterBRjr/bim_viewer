@@ -17,6 +17,7 @@ function setSectionCut(enabled, ratio = 1.0) {
 
   if (!state.isSectionActive || !state.currentModel) {
     state.renderer.clippingPlanes = [];
+    if (typeof requestRender === 'function') requestRender(4);
     return;
   }
 
@@ -29,6 +30,7 @@ function setSectionCut(enabled, ratio = 1.0) {
   const cutHeight = minY + (maxY - minY) * state.sectionRatio;
   state.sectionPlane.set(new THREE.Vector3(0, -1, 0), cutHeight);
   state.renderer.clippingPlanes = [state.sectionPlane];
+  if (typeof requestRender === 'function') requestRender(4);
 }
 
 // Exportações

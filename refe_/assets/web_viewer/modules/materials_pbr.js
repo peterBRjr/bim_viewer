@@ -65,7 +65,7 @@ function createBimArchitecturalMaterial(color, matBucketIndex) {
   const saturation = maxC > 0.01 ? (maxC - minC) / maxC : 0;
   const isMetallicTone = !isTransparent && saturation < 0.14 && maxC > 0.22 && maxC < 0.82;
 
-  const bumpTex = !isTransparent ? getArchitecturalBumpTexture() : null;
+  const bumpTex = (!isTransparent && !state.isLowSpecDevice) ? getArchitecturalBumpTexture() : null;
   const offsetSlot = (matBucketIndex % 7) + 1;
 
   const material = new THREE.MeshStandardMaterial({

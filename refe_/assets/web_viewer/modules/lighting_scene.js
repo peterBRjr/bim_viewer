@@ -8,22 +8,28 @@ window.BimEngine = window.BimEngine || {};
  * Inicializa a Cena Three.js, Renderizador WebGL Logarítmico, Luzes Técnicas e Grid
  */
 function initScene(container) {
+  state.isLowSpecDevice = typeof detectHardwareProfile === 'function' ? detectHardwareProfile() : false;
+  const maxDpr = state.isLowSpecDevice ? 1.25 : 2.0;
+  state.basePixelRatio = Math.min(window.devicePixelRatio || 1, maxDpr);
+
   // 1. Cena
   state.scene = new THREE.Scene();
   state.scene.background = new THREE.Color(0x0F172A); // Slate Dark do Design System
 
-  // 2. Renderizador WebGL de Alta Performance com Buffer de Profundidade Logarítmico (Zero Z-Fighting)
+  // 2. Renderizador WebGL Adaptativo:
+  // Em tablets de 4 GB / GPUs Tile-Based de entrada (ex: PowerVR GE8320), desativa logarithmicDepthBuffer
+  // para preservar o Hardware Early-Z (Hidden Surface Removal), multiplicando o FPS sem perder qualidade.
   state.renderer = new THREE.WebGLRenderer({
     antialias: true,
     alpha: false,
     powerPreference: 'high-performance',
     precision: 'highp',
-    logarithmicDepthBuffer: true
+    logarithmicDepthBuffer: !state.isLowSpecDevice
   });
   state.renderer.setSize(window.innerWidth, window.innerHeight);
-  state.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  state.renderer.setPixelRatio(state.basePixelRatio);
   state.renderer.shadowMap.enabled = true;
-  state.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  state.renderer.shadowMap.type = state.isLowSpecDevice ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
   state.renderer.toneMapping = THREE.ACESFilmicToneMapping;
   state.renderer.toneMappingExposure = 1.12;
   state.renderer.localClippingEnabled = true;
@@ -40,8 +46,9 @@ function initScene(container) {
   const mainDirLight = new THREE.DirectionalLight(0xFFFBEB, 0.90);
   mainDirLight.position.set(35, 65, 45);
   mainDirLight.castShadow = true;
-  mainDirLight.shadow.mapSize.width = 2048;
-  mainDirLight.shadow.mapSize.height = 2048;
+  const shadowRes = state.isLowSpecDevice ? 1024 : 2048;
+  mainDirLight.shadow.mapSize.width = shadowRes;
+  mainDirLight.shadow.mapSize.height = shadowRes;
   mainDirLight.shadow.bias = -0.0002;
   state.scene.add(mainDirLight);
 

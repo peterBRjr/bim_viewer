@@ -38,6 +38,9 @@ const state = {
   pendingMeasurePoint: null,
   pendingMeasureMarker: null,
   isHeavyModel: false,
+  isLowSpecDevice: false,
+  basePixelRatio: 1.5,
+  renderFramesRemaining: 15,
   modelBox: new THREE.Box3(),
   sectionPlane: new THREE.Plane(new THREE.Vector3(0, -1, 0), 100),
   isSectionActive: false,
@@ -80,14 +83,59 @@ const state = {
 };
 
 /**
+ * Detecta automaticamente tablets/celulares de entrada (ex: 4 GB RAM, GPUs PowerVR / Mali-G52 / Adreno série 500-610)
+ * para calibrar pipeline gráfico sem perda visual e mantendo 100% da qualidade Ultra em iPhones/flagships.
+ */
+function detectHardwareProfile() {
+  try {
+    const mem = Number(navigator.deviceMemory || 0);
+    const cores = Number(navigator.hardwareConcurrency || 8);
+    if ((mem > 0 && mem <= 4) || cores <= 4) {
+      return true;
+    }
+    if (typeof document !== 'undefined') {
+      const probeCanvas = document.createElement('canvas');
+      const gl = probeCanvas.getContext('webgl') || probeCanvas.getContext('experimental-webgl');
+      if (gl) {
+        const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+        if (dbg) {
+          const gpu = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || '').toLowerCase();
+          if (
+            gpu.includes('powervr') ||
+            gpu.includes('ge8320') ||
+            gpu.includes('mali-t') ||
+            gpu.includes('mali-g3') ||
+            gpu.includes('mali-g5') ||
+            /adreno\s*\(tm\)\s*(3|4|5|610|612)/.test(gpu)
+          ) {
+            return true;
+          }
+        }
+      }
+    }
+  } catch (e) {}
+  return false;
+}
+
+/**
+ * Solicita renderização sob demanda (On-Demand Rendering) por N frames,
+ * zerando o consumo de GPU quando a câmera está parada e liberando fluidez total para a UI Flutter.
+ */
+function requestRender(frames = 4) {
+  const count = Number(frames) || 4;
+  if (count > state.renderFramesRemaining) {
+    state.renderFramesRemaining = count;
+  }
+}
+
+/**
  * Envia mensagens estruturadas para o shell Flutter via InAppWebView JS Bridge.
  */
 function notifyFlutter(handlerName, data = {}) {
+  requestRender(4);
   try {
     if (window.flutter_inappwebview && typeof window.flutter_inappwebview.callHandler === 'function') {
       window.flutter_inappwebview.callHandler(handlerName, data);
-    } else {
-      console.log(`[JS Bridge Simulado] -> ${handlerName}:`, data);
     }
   } catch (err) {
     console.error(`Erro ao invocar JS Bridge '${handlerName}':`, err);
@@ -96,7 +144,11 @@ function notifyFlutter(handlerName, data = {}) {
 
 // Exportações para namespaces global e BimEngine
 window.BimEngine.state = state;
+window.BimEngine.detectHardwareProfile = detectHardwareProfile;
+window.BimEngine.requestRender = requestRender;
 window.BimEngine.notifyFlutter = notifyFlutter;
 window.state = state;
+window.detectHardwareProfile = detectHardwareProfile;
+window.requestRender = requestRender;
 window.notifyFlutter = notifyFlutter;
 

@@ -58,6 +58,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   int? _preDynamicIsolatedElementId;
   bool _wasLandscapeBeforeDynamic = false;
   Timer? _viewportResizeTimer;
+  Timer? _splitDragThrottleTimer;
   Timer? _elementSwitchWatchdog;
   bool _isDisposed = false;
 
@@ -129,6 +130,7 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   void dispose() {
     _isDisposed = true;
     _viewportResizeTimer?.cancel();
+    _splitDragThrottleTimer?.cancel();
     _elementSwitchWatchdog?.cancel();
     if (_isDynamicViewActive) {
       _restorePreviousOrientationSafe();
@@ -339,13 +341,21 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     });
   }
 
-  /// Atualiza a proporção da divisória horizontal (entre 28% e 72% para a janela 3D à esquerda).
+  /// Atualiza a proporção da divisória horizontal (entre 28% e 72% para a janela 3D à esquerda)
+  /// com throttling leve de IPC para manter fluidez total em tablets de 4 GB RAM.
   void setDynamicSplitRatio(double ratio) {
     final clamped = ratio.clamp(0.28, 0.72);
     if ((_dynamicSplitRatio - clamped).abs() < 0.002) return;
     _dynamicSplitRatio = clamped;
     notifyListeners();
-    _jsBridge.notifyViewportResized();
+    if (_splitDragThrottleTimer == null || !_splitDragThrottleTimer!.isActive) {
+      _jsBridge.notifyViewportResized();
+      _splitDragThrottleTimer = Timer(const Duration(milliseconds: 32), () {
+        if (!_isDisposed) {
+          _jsBridge.notifyViewportResized();
+        }
+      });
+    }
   }
 
   /// Restaura a proporção equilibrada padrão da divisória (46% 3D / 54% Especificações do Projeto).

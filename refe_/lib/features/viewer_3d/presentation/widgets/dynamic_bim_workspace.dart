@@ -1,5 +1,3 @@
-import 'dart:ui';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -181,61 +179,55 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                 ),
                 const SizedBox(width: 8),
                 Flexible(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(18),
-                    child: BackdropFilter(
-                      filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.72),
-                          borderRadius: BorderRadius.circular(18),
-                          border: Border.all(
-                            color: isSwitching
-                                ? AppColors.accent.withValues(alpha: 0.65)
-                                : Colors.white.withValues(alpha: 0.14),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.90),
+                      borderRadius: BorderRadius.circular(18),
+                      border: Border.all(
+                        color: isSwitching
+                            ? AppColors.accent.withValues(alpha: 0.65)
+                            : Colors.white.withValues(alpha: 0.16),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (isSwitching)
+                          const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.8,
+                              color: Color(0xFF60A5FA),
+                            ),
+                          )
+                        else
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: const BoxDecoration(
+                              color: AppColors.success,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                        const SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            isSwitching
+                                ? 'Renderizando peça...'
+                                : 'Vista na Obra • #${element.expressID}',
+                            style: const TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.surface,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (isSwitching)
-                              const SizedBox(
-                                width: 10,
-                                height: 10,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.8,
-                                  color: Color(0xFF60A5FA),
-                                ),
-                              )
-                            else
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.success,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                isSwitching
-                                    ? 'Renderizando peça...'
-                                    : 'Vista na Obra • #${element.expressID}',
-                                style: const TextStyle(
-                                  fontFamily: AppTypography.fontFamily,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.surface,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      ],
                     ),
                   ),
                 ),
@@ -247,76 +239,70 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
               alignment: Alignment.bottomCenter,
               child: SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(24),
-                  child: BackdropFilter(
-                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                    child: AnimatedOpacity(
-                      duration: const Duration(milliseconds: 140),
-                      opacity: isSwitching ? 0.55 : 1.0,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0F172A).withValues(alpha: 0.80),
-                          borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                child: AnimatedOpacity(
+                  duration: const Duration(milliseconds: 140),
+                  opacity: isSwitching ? 0.55 : 1.0,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A).withValues(alpha: 0.92),
+                      borderRadius: BorderRadius.circular(24),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildHudMiniToggle(
+                          icon: Icons.center_focus_strong_rounded,
+                          label: 'Focar Peça',
+                          isActive: false,
+                          onTap: isSwitching
+                              ? null
+                              : () {
+                                  HapticFeedback.selectionClick();
+                                  widget.controller.focusCurrentElementInDynamicView();
+                                },
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _buildHudMiniToggle(
-                              icon: Icons.center_focus_strong_rounded,
-                              label: 'Focar Peça',
-                              isActive: false,
-                              onTap: isSwitching
-                                  ? null
-                                  : () {
-                                      HapticFeedback.selectionClick();
-                                      widget.controller.focusCurrentElementInDynamicView();
-                                    },
-                            ),
-                            const SizedBox(width: 4),
-                            _buildHudMiniToggle(
-                              icon: Icons.blur_on_rounded,
-                              label: 'Raio-X Obra',
-                              isActive: widget.controller.isDynamicXrayActive,
-                              onTap: isSwitching
-                                  ? null
-                                  : () {
-                                      HapticFeedback.selectionClick();
-                                      widget.controller.toggleDynamicXrayContext();
-                                    },
-                            ),
-                            const SizedBox(width: 4),
-                            _buildHudMiniToggle(
-                              icon: Icons.auto_awesome_rounded,
-                              label: 'Similares 3D',
-                              isActive: widget.controller.highlightSimilarIn3D,
-                              activeColor: AppColors.success,
-                              onTap: isSwitching
-                                  ? null
-                                  : () {
-                                      HapticFeedback.selectionClick();
-                                      widget.controller.toggleHighlightSimilarIn3D();
-                                    },
-                            ),
-                            const SizedBox(width: 4),
-                            _buildHudMiniToggle(
-                              icon: isIsolated
-                                  ? Icons.all_inclusive_rounded
-                                  : Icons.filter_center_focus_rounded,
-                              label: isIsolated ? 'Ver Obra' : 'Isolar',
-                              isActive: isIsolated,
-                              onTap: isSwitching
-                                  ? null
-                                  : () {
-                                      HapticFeedback.selectionClick();
-                                      widget.controller.isolateSelectedElement();
-                                    },
-                            ),
-                          ],
+                        const SizedBox(width: 4),
+                        _buildHudMiniToggle(
+                          icon: Icons.blur_on_rounded,
+                          label: 'Raio-X Obra',
+                          isActive: widget.controller.isDynamicXrayActive,
+                          onTap: isSwitching
+                              ? null
+                              : () {
+                                  HapticFeedback.selectionClick();
+                                  widget.controller.toggleDynamicXrayContext();
+                                },
                         ),
-                      ),
+                        const SizedBox(width: 4),
+                        _buildHudMiniToggle(
+                          icon: Icons.auto_awesome_rounded,
+                          label: 'Similares 3D',
+                          isActive: widget.controller.highlightSimilarIn3D,
+                          activeColor: AppColors.success,
+                          onTap: isSwitching
+                              ? null
+                              : () {
+                                  HapticFeedback.selectionClick();
+                                  widget.controller.toggleHighlightSimilarIn3D();
+                                },
+                        ),
+                        const SizedBox(width: 4),
+                        _buildHudMiniToggle(
+                          icon: isIsolated
+                              ? Icons.all_inclusive_rounded
+                              : Icons.filter_center_focus_rounded,
+                          label: isIsolated ? 'Ver Obra' : 'Isolar',
+                          isActive: isIsolated,
+                          onTap: isSwitching
+                              ? null
+                              : () {
+                                  HapticFeedback.selectionClick();
+                                  widget.controller.isolateSelectedElement();
+                                },
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -333,38 +319,33 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
     required String label,
     required VoidCallback onTap,
   }) {
-    return ClipRRect(
+    return Material(
+      color: AppColors.primary.withValues(alpha: 0.92),
       borderRadius: BorderRadius.circular(20),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Material(
-          color: AppColors.primary.withValues(alpha: 0.82),
-          child: InkWell(
-            onTap: onTap,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+          decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: AppColors.surface),
+              const SizedBox(width: 5),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontFamily: AppTypography.fontFamily,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.surface,
+                ),
               ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, size: 15, color: AppColors.surface),
-                  const SizedBox(width: 5),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontFamily: AppTypography.fontFamily,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.surface,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            ],
           ),
         ),
       ),

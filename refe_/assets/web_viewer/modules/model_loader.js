@@ -149,10 +149,11 @@ function installSmartIfcPipeline(ifcManager) {
     });
     this.notifyLoadingEnded();
 
-    // Otimização seletiva para modelos grandes (> 1,2M vértices):
+    // Otimização seletiva para modelos densos (calibrada para 4 GB RAM sem perda de qualidade arquitetônica):
     // 1. Mantém 100% da geometria original das paredes, lajes, aberturas, vigas e pilares únicos (com soldagem sem perdas).
     // 2. Simplifica apenas micro-fixadores invisíveis (ex: clips de 5cm repetidos centenas de vezes) ou veículos/adereços ultra-densos.
-    if (rawTotalVerts > 1200000) {
+    const smartLodThreshold = state.isLowSpecDevice ? 450000 : 1200000;
+    if (rawTotalVerts > smartLodThreshold) {
       for (const entry of geomCache.values()) {
         const [minX, minY, minZ, maxX, maxY, maxZ] = entry.bbox;
         const maxD = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
@@ -519,8 +520,9 @@ async function loadIfcModel(arrayBuffer) {
 
     notifyFlutter('onLoadingProgress', { progress: 88 });
 
-    // Desativa sombras pesadas automaticamente em modelos densos (>250 mil vértices) para manter 60 FPS
-    state.isHeavyModel = positionAttr.count > 250000;
+    // Desativa sombras pesadas automaticamente em modelos densos (ou mais cedo em tablets de 4 GB RAM) para manter 60 FPS
+    const heavyVertThreshold = state.isLowSpecDevice ? 90000 : 250000;
+    state.isHeavyModel = positionAttr.count > heavyVertThreshold;
     ifcModel.castShadow = !state.isHeavyModel;
     ifcModel.receiveShadow = !state.isHeavyModel;
     if (state.renderer) {

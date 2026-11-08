@@ -1595,6 +1595,7 @@ function highlightSimilarElements(idsList, activeExpressID) {
       });
       if (subset) subset.renderOrder = 1;
       state.similarSubsetSignature = nextSignature;
+      if (typeof requestRender === 'function') requestRender(4);
     } catch (e) {
       console.warn('Falha ao criar subset de peças similares:', e);
     }
@@ -1609,6 +1610,7 @@ function clearSimilarHighlights(resetList = true) {
     state.similarHighlightedIds = [];
   }
   state.similarSubsetSignature = '';
+  if (typeof requestRender === 'function') requestRender(4);
 
   if (state.ifcLoader && state.currentModel?.modelID !== undefined && state.secondaryHighlightMaterial) {
     try {
@@ -1800,6 +1802,7 @@ function setDynamicXrayContext(enabled, keepExpressIds = []) {
       });
     }
   }
+  if (typeof requestRender === 'function') requestRender(4);
 }
 
 // Exportações Globais para JS Bridge e Módulos
