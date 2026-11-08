@@ -8,7 +8,10 @@ import 'package:refe_/features/home/presentation/widgets/project_card.dart';
 import 'package:refe_/features/home/presentation/widgets/confirm_delete_dialog.dart';
 import 'package:refe_/features/viewer_3d/presentation/controllers/viewer_3d_controller.dart';
 import 'package:refe_/features/viewer_3d/presentation/widgets/bim_metadata_bottom_sheet.dart';
+import 'package:refe_/features/viewer_3d/presentation/widgets/bim_tabbar.dart';
+import 'package:refe_/features/viewer_3d/presentation/widgets/dynamic_bim_workspace.dart';
 import 'package:refe_/features/viewer_3d/domain/models/measurement_model.dart';
+import 'package:refe_/features/viewer_3d/domain/utils/bim_nomenclature_mapper.dart';
 import 'package:refe_/features/viewer_3d/presentation/widgets/measure_mode_overlay.dart';
 
 class FakeStorageService extends StorageService {
@@ -559,6 +562,252 @@ void main() {
       expect(metrics['Área Total'], '150,50 m²');
       expect(metrics['Volume'], '45,20 m³');
       expect(metrics['Caimento'], '30°');
+    });
+  });
+
+  group('Dynamic View (Visualização Dinâmica Horizontal, Níveis IFC & openBIM Specs)', () {
+    test('BimNomenclatureMapper decodes UTF-16 IFC strings and standardizes nomenclature', () {
+      final decodedUtf16 = BimElementMetadata.decodeIfcString(r'Funda\X2\00E700E3\X0\o N\X\EDvel 1');
+      expect(decodedUtf16, 'Fundação Nível 1');
+
+      expect(BimNomenclatureMapper.formatPropertyKey('LoadBearing'), 'Função Estrutural (Portante)');
+      expect(BimNomenclatureMapper.formatPropertyKey('IsExternal'), 'Exposição Externa (Envoltória/Fachada)');
+      expect(BimNomenclatureMapper.formatPropertyValue('LoadBearing', '.T.'), 'Sim');
+      expect(BimNomenclatureMapper.formatPropertyValue('Width', 0.2), '0,20 m (200 mm)');
+      expect(BimNomenclatureMapper.formatPropertyValue('GrossArea', 48.5), '48,50 m²');
+    });
+
+    testWidgets('NubankBimTabBar renders Dynamic View button and triggers callback', (WidgetTester tester) async {
+      bool dynamicClicked = false;
+      const metadata = BimElementMetadata(
+        expressID: 61,
+        name: 'Parede básica:Genérico - 200 mm:328802',
+        category: 'IfcWallStandardCase',
+        psets: {},
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: NubankBimTabBar(
+              metadata: metadata,
+              isIsolated: false,
+              onViewBimData: () {},
+              onHideElement: () {},
+              onIsolateElement: () {},
+              onDynamicView: () => dynamicClicked = true,
+              onClose: () {},
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Dinâmica'), findsOneWidget);
+      await tester.tap(find.text('Dinâmica'));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(dynamicClicked, isTrue);
+    });
+
+    test('Viewer3DController manages Dynamic View state, split ratio, and storey filtering', () async {
+      final controller = Viewer3DController();
+      addTearDown(controller.dispose);
+      controller.onViewerReady();
+
+      final specs = BimProjectSpecs.fromMap({
+        'schema': 'IFC2X3',
+        'viewDefinition': 'CoordinationView_V2.0',
+        'authoringApp': 'Autodesk Revit 2027 (PTB)',
+        'projectName': 'Projeto Turim',
+        'projectNumber': '0029',
+        'totalElements': 12,
+        'storeys': [
+          {'expressID': 26, 'name': r'N\X\EDvel 1', 'elevationMeters': 0.0, 'totalElementsInStorey': 11},
+          {'expressID': 30, 'name': r'N\X\EDvel 2', 'elevationMeters': 7.6, 'totalElementsInStorey': 1},
+          {'expressID': 34, 'name': r'N\X\EDvel 3', 'elevationMeters': 14.9, 'totalElementsInStorey': 0},
+        ],
+      });
+      controller.onBimProjectSpecsLoaded(specs);
+      expect(controller.availableStoreys.length, 3);
+      expect(controller.availableStoreys[0].name, 'Nível 1');
+
+      final element = BimElementMetadata.fromMap({
+        'expressID': 354,
+        'name': 'M_Fixo:0915 x 1830mm:330694',
+        'category': 'IfcWindow',
+        'hostStoreyId': 26,
+        'hostStoreyName': 'Nível 1',
+        'analytics': {
+          'typeName': 'M_Fixo:0915 x 1830mm',
+          'hostStoreyId': 26,
+          'hostStoreyName': 'Nível 1',
+          'totalInProject': 3,
+          'totalCategoryInProject': 3,
+          'allInstanceIds': [354, 571, 582],
+          'countByStorey': {'26': 3, '30': 0, '34': 0},
+          'instanceIdsByStorey': {
+            '26': [354, 571, 582],
+            '30': [],
+            '34': [],
+          },
+          'categoryCountByStorey': {'26': 3, '30': 0, '34': 0},
+          'totalMetrics': {'lengthM': 2.75, 'areaM2': 5.02, 'volumeM3': 1.0},
+          'metricsByStorey': {
+            '26': {'lengthM': 2.75, 'areaM2': 5.02, 'volumeM3': 1.0},
+            '30': {'lengthM': 0.0, 'areaM2': 0.0, 'volumeM3': 0.0},
+          },
+        },
+        'psets': {
+          'Pset_WindowCommon': {'IsExternal': '.T.', 'Reference': '0915 x 1830mm'},
+        },
+      });
+      controller.onElementSelected(element);
+
+      await controller.enterDynamicView();
+      expect(controller.isDynamicViewActive, isTrue);
+      expect(controller.dynamicSplitRatio, 0.46);
+
+      // Proteção contra toque acidental no vazio durante a Visualização Dinâmica
+      controller.onElementDeselected();
+      expect(controller.selectedElement, isNotNull);
+
+      // Ajuste de tamanho da divisória
+      controller.setDynamicSplitRatio(0.60);
+      expect(controller.dynamicSplitRatio, 0.60);
+      controller.setDynamicSplitRatio(0.95); // Deve limitar em 0.72
+      expect(controller.dynamicSplitRatio, 0.72);
+      controller.resetDynamicSplitRatio();
+      expect(controller.dynamicSplitRatio, 0.46);
+
+      // Filtro por Nível
+      await controller.setStoreyFilter(26);
+      expect(controller.selectedStoreyFilterId, 26);
+      expect(element.analytics!.countForStorey(26), 3);
+
+      await controller.setStoreyFilter(30);
+      expect(controller.selectedStoreyFilterId, 30);
+      expect(element.analytics!.countForStorey(30), 0);
+
+      await controller.exitDynamicView();
+      expect(controller.isDynamicViewActive, isFalse);
+      // Aguarda o timer defensivo de 450ms de restauração de orientação
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    });
+
+    testWidgets('DynamicBimWorkspace updates quantities dynamically on Storey Dropdown change and resizes split view', (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1600, 900);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final controller = Viewer3DController();
+      addTearDown(controller.dispose);
+      controller.onViewerReady();
+      controller.onBimProjectSpecsLoaded(BimProjectSpecs.fromMap({
+        'schema': 'IFC2X3',
+        'viewDefinition': 'CoordinationView_V2.0',
+        'authoringApp': 'Autodesk Revit 2027 (PTB)',
+        'projectName': 'Projeto Turim',
+        'projectNumber': '0029',
+        'projectPhase': 'Projeto Arquitetônico',
+        'address': 'Araraquara - SP • Brasil',
+        'totalElements': 12,
+        'storeys': [
+          {'expressID': 26, 'name': 'Nível 1', 'elevationMeters': 0.0, 'totalElementsInStorey': 11},
+          {'expressID': 30, 'name': 'Nível 2', 'elevationMeters': 7.6, 'totalElementsInStorey': 1},
+        ],
+        'categorySummary': {'IfcWall': 6, 'IfcWindow': 3},
+      }));
+
+      controller.onElementSelected(BimElementMetadata.fromMap({
+        'expressID': 354,
+        'name': 'M_Fixo:0915 x 1830mm:330694',
+        'category': 'IfcWindow',
+        'hostStoreyId': 26,
+        'hostStoreyName': 'Nível 1',
+        'materials': ['Alumínio Anodizado • 50 mm'],
+        'analytics': {
+          'typeName': 'M_Fixo:0915 x 1830mm',
+          'hostStoreyId': 26,
+          'hostStoreyName': 'Nível 1',
+          'totalInProject': 3,
+          'totalCategoryInProject': 3,
+          'allInstanceIds': [354, 571, 582],
+          'countByStorey': {'26': 3, '30': 0},
+          'instanceIdsByStorey': {'26': [354, 571, 582], '30': []},
+          'categoryCountByStorey': {'26': 3, '30': 0},
+          'totalMetrics': {'lengthM': 2.75, 'areaM2': 5.02, 'volumeM3': 1.0},
+          'metricsByStorey': {
+            '26': {'lengthM': 2.75, 'areaM2': 5.02, 'volumeM3': 1.0},
+            '30': {'lengthM': 0.0, 'areaM2': 0.0, 'volumeM3': 0.0},
+          },
+        },
+        'psets': {
+          'Pset_WindowCommon': {'IsExternal': '.T.', 'Reference': '0915 x 1830mm'},
+        },
+      }));
+
+      await controller.enterDynamicView();
+
+      final project = ProjectModel(
+        id: 'proj-1',
+        name: 'ajustado.ifc',
+        filePath: '/local/ajustado.ifc',
+        fileSizeMB: 1.2,
+        format: 'IFC',
+        createdAt: DateTime(2026, 11, 8),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ListenableBuilder(
+              listenable: controller,
+              builder: (context, _) {
+                return DynamicBimWorkspace(
+                  controller: controller,
+                  project: project,
+                  totalWidth: 1600,
+                  leftViewportWidth: 1600 * controller.dynamicSplitRatio,
+                  onExit: () => controller.exitDynamicView(),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Verifica exibição inicial (Todos os Níveis -> 3 unidades + Especificações padronizadas)
+      expect(find.text('0915 x 1830mm'), findsWidgets);
+      expect(find.text('3'), findsOneWidget);
+      expect(find.text('Exposição Externa (Envoltória/Fachada)'), findsOneWidget);
+
+      // Seleciona "Nível 2 (+7,60 m)" no DropdownList e valida atualização dinâmica para 0 unidades
+      await tester.tap(find.byKey(const ValueKey('storey_filter_dropdown')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Nível 2 (+7,60 m)').last);
+      await tester.pumpAndSettle();
+
+      expect(controller.selectedStoreyFilterId, 30);
+      expect(find.text('0'), findsOneWidget);
+      expect(find.textContaining('Nenhuma unidade'), findsOneWidget);
+
+      // Filtra para ver a aba "Arquivo BIM" com as especificações importadas do arquivo IFC
+      await tester.tap(find.text('Arquivo BIM'));
+      await tester.pumpAndSettle();
+      expect(find.text('Projeto Turim'), findsOneWidget);
+      expect(find.text('Autodesk Revit 2027 (PTB)'), findsOneWidget);
+      expect(find.text('IFC2X3'), findsOneWidget);
+
+      // Arrasta a divisória central para personalizar o tamanho das janelas
+      final handleFinder = find.byIcon(Icons.drag_indicator_rounded);
+      await tester.drag(handleFinder, const Offset(160, 0));
+      await tester.pumpAndSettle();
+      expect(controller.dynamicSplitRatio, greaterThan(0.52));
+
+      await controller.exitDynamicView();
+      await tester.pump(const Duration(milliseconds: 500));
     });
   });
 }

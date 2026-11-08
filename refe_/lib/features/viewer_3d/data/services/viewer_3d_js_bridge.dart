@@ -17,6 +17,7 @@ abstract class Viewer3dJsBridgeListener {
   void onMeasurementWaitingPoint({required bool isWaiting, String? message});
   void onMeasurementRemoved();
   void onMeasurementCleared();
+  void onBimProjectSpecsLoaded(BimProjectSpecs specs);
 }
 
 /// Serviço responsável por encapsular a comunicação bidirecional (JS Bridge)
@@ -157,6 +158,18 @@ class Viewer3dJsBridge {
         _listener?.onMeasurementCleared();
       },
     );
+
+    // 8. Especificações Globais openBIM e Níveis (IfcBuildingStorey) importados do arquivo IFC
+    controller.addJavaScriptHandler(
+      handlerName: 'onBimProjectSpecsLoaded',
+      callback: (args) {
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          final specs = BimProjectSpecs.fromMap(data);
+          _listener?.onBimProjectSpecsLoaded(specs);
+        }
+      },
+    );
   }
 
   // =========================================================================
@@ -252,5 +265,45 @@ class Viewer3dJsBridge {
       source: 'window.removeLastMeasurement();',
     );
   }
-}
 
+  // =========================================================================
+  // COMANDOS DA VISUALIZAÇÃO DINÂMICA HORIZONTAL (CÂMERA, INSTÂNCIAS E RAIO-X)
+  // =========================================================================
+
+  Future<void> focusElementInDynamicView(int expressID) async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.focusElementForDynamicView) window.focusElementForDynamicView($expressID);',
+    );
+  }
+
+  Future<void> selectElementByExpressId(int expressID, {bool focusCamera = true}) async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.selectElementByExpressId) window.selectElementByExpressId($expressID, $focusCamera);',
+    );
+  }
+
+  Future<void> highlightSimilarElements(List<int> ids, {int? activeExpressID}) async {
+    final activeArg = activeExpressID != null ? '$activeExpressID' : 'null';
+    await _controller?.evaluateJavascript(
+      source: 'if (window.highlightSimilarElements) window.highlightSimilarElements(${jsonEncode(ids)}, $activeArg);',
+    );
+  }
+
+  Future<void> clearSimilarHighlights() async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.clearSimilarHighlights) window.clearSimilarHighlights();',
+    );
+  }
+
+  Future<void> setDynamicXrayContext(bool enabled, List<int> keepIds) async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.setDynamicXrayContext) window.setDynamicXrayContext($enabled, ${jsonEncode(keepIds)});',
+    );
+  }
+
+  Future<void> notifyViewportResized() async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.notifyViewportResized) window.notifyViewportResized();',
+    );
+  }
+}

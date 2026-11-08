@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'bim_project_specs.dart';
+
+export 'bim_project_specs.dart';
 
 /// Metadados de um elemento BIM selecionado via Raycaster na Viewport 3D.
 class BimElementMetadata {
@@ -8,6 +11,15 @@ class BimElementMetadata {
   final Map<String, dynamic> psets;
   final List<int> subIds;
   final bool isComposite;
+  final String? globalId;
+  final String? tag;
+  final String? predefinedType;
+  final String? typeName;
+  final int? hostStoreyId;
+  final String? hostStoreyName;
+  final List<String> materials;
+  final Map<String, double> geometricDimensions;
+  final BimPieceAnalytics? analytics;
 
   const BimElementMetadata({
     required this.expressID,
@@ -16,10 +28,39 @@ class BimElementMetadata {
     required this.psets,
     this.subIds = const [],
     this.isComposite = false,
+    this.globalId,
+    this.tag,
+    this.predefinedType,
+    this.typeName,
+    this.hostStoreyId,
+    this.hostStoreyName,
+    this.materials = const [],
+    this.geometricDimensions = const {},
+    this.analytics,
   });
 
   factory BimElementMetadata.fromMap(Map<String, dynamic> map) {
     final subIdsRaw = (map['subIds'] as List?)?.map((e) => (e as num).toInt()).toList() ?? [];
+    final matsRaw = (map['materials'] as List?)
+            ?.map((e) => decodeIfcString(e.toString()).trim())
+            .where((s) => s.isNotEmpty)
+            .toList() ??
+        const <String>[];
+
+    final Map<String, double> parsedDims = {};
+    if (map['geometricDimensions'] is Map) {
+      (map['geometricDimensions'] as Map).forEach((k, v) {
+        if (v is num) parsedDims[k.toString()] = v.toDouble();
+      });
+    }
+
+    BimPieceAnalytics? parsedAnalytics;
+    if (map['analytics'] is Map) {
+      parsedAnalytics = BimPieceAnalytics.fromMap(
+        (map['analytics'] as Map).cast<String, dynamic>(),
+      );
+    }
+
     return BimElementMetadata(
       expressID: (map['expressID'] as num?)?.toInt() ?? 0,
       name: map['name']?.toString() ?? 'Elemento Desconhecido',
@@ -27,24 +68,42 @@ class BimElementMetadata {
       psets: (map['psets'] as Map?)?.cast<String, dynamic>() ?? {},
       subIds: subIdsRaw,
       isComposite: map['isComposite'] == true || subIdsRaw.length > 1,
+      globalId: map['globalId']?.toString(),
+      tag: map['tag']?.toString(),
+      predefinedType: map['predefinedType']?.toString(),
+      typeName: map['typeName'] != null ? decodeIfcString(map['typeName'].toString()).trim() : null,
+      hostStoreyId: (map['hostStoreyId'] as num?)?.toInt(),
+      hostStoreyName: map['hostStoreyName'] != null
+          ? decodeIfcString(map['hostStoreyName'].toString()).trim()
+          : null,
+      materials: matsRaw,
+      geometricDimensions: parsedDims,
+      analytics: parsedAnalytics,
     );
   }
 
-  /// Decodifica caracteres ISO-10303-21 comuns do Revit (ex: \X\E7 -> ç, \X\ED -> í)
+  /// Decodifica sequências ISO-10303-21 (STEP) de arquivos IFC (\X2\XXXX\X0\ UTF-16 e \X\XX ISO-8859-1).
   static String decodeIfcString(String text) {
-    if (!text.contains(r'\X\') && !text.contains(r'\X2\')) return text;
+    if (!text.contains(r'\X')) return text;
     var result = text;
-    final Map<String, String> ifcMap = {
-      r'\X\E1': 'á', r'\X\E9': 'é', r'\X\ED': 'í', r'\X\F3': 'ó', r'\X\FA': 'ú',
-      r'\X\E3': 'ã', r'\X\F5': 'õ', r'\X\E2': 'â', r'\X\EA': 'ê', r'\X\F4': 'ô',
-      r'\X\E7': 'ç', r'\X\C1': 'Á', r'\X\C9': 'É', r'\X\CD': 'Í', r'\X\D3': 'Ó',
-      r'\X\DA': 'Ú', r'\X\C3': 'Ã', r'\X\D5': 'Õ', r'\X\C2': 'Â', r'\X\CA': 'Ê',
-      r'\X\D4': 'Ô', r'\X\C7': 'Ç', r'\X\AA': 'ª', r'\X\BA': 'º', r'\X\E0': 'à',
-      r'\X\C0': 'À',
-    };
-    ifcMap.forEach((key, val) {
-      result = result.replaceAll(key, val);
+
+    // 1. Sequências UTF-16 (\X2\00ED00E3...\X0\)
+    result = result.replaceAllMapped(RegExp(r'\\X2\\([0-9A-Fa-f]+)\\X0\\'), (match) {
+      final hex = match.group(1) ?? '';
+      final sb = StringBuffer();
+      for (var i = 0; i + 3 < hex.length; i += 4) {
+        final code = int.tryParse(hex.substring(i, i + 4), radix: 16);
+        if (code != null) sb.writeCharCode(code);
+      }
+      return sb.toString();
     });
+
+    // 2. Sequências ISO-8859-1 de 1 byte (\X\E7 -> ç, \X\ED -> í, etc.)
+    result = result.replaceAllMapped(RegExp(r'\\X\\([0-9A-Fa-f]{2})'), (match) {
+      final code = int.tryParse(match.group(1) ?? '', radix: 16);
+      return code != null ? String.fromCharCode(code) : match.group(0)!;
+    });
+
     return result;
   }
 
@@ -95,7 +154,9 @@ class BimElementMetadata {
     if (cat.contains('pipe') || cat.contains('tubo')) return 'Tubulação';
     if (cat.contains('duct') || cat.contains('duto')) return 'Duto';
     if (cat.contains('covering') || cat.contains('forro')) return 'Forro';
+    if (cat.contains('footing') || cat.contains('pile')) return 'Fundação';
     if (cat.contains('member')) return 'Perfil Estrutural';
+    if (cat.contains('plate')) return 'Chapa / Painel';
     if (cat.contains('proxy')) return 'Elemento Genérico';
     return category.replaceAll('Ifc', '');
   }
@@ -159,6 +220,10 @@ class BimElementMetadata {
       }
     }
 
+    if (hostStoreyName != null && hostStoreyName!.isNotEmpty && metrics.length < 4 && !metrics.containsKey('Nível')) {
+      metrics['Nível'] = hostStoreyName!;
+    }
+
     if (isComposite && !metrics.containsKey('Composição')) {
       metrics['Composição'] = '${subIds.length} partes';
     }
@@ -172,4 +237,3 @@ class BimElementMetadata {
     return metrics;
   }
 }
-

@@ -12,12 +12,13 @@ import '../../../../core/services/localhost_server_service.dart';
 import '../../../home/domain/models/project_model.dart';
 import '../controllers/viewer_3d_controller.dart';
 import '../widgets/bim_metadata_bottom_sheet.dart';
-import '../widgets/hidden_elements_bottom_sheet.dart';
 import '../widgets/bim_tabbar.dart';
+import '../widgets/dynamic_bim_workspace.dart';
+import '../widgets/hidden_elements_bottom_sheet.dart';
 import '../widgets/measure_mode_overlay.dart';
 
 /// Tela do Visualizador 3D baseada em ThatOpen Engine (@thatopen/components / Three.js).
-/// Executa a Viewport WebGL em InAppWebView com JS Bridge bidirecional.
+/// Executa a Viewport WebGL em InAppWebView com JS Bridge bidirecional e Visualização Dinâmica Horizontal.
 class Viewer3dScreen extends StatefulWidget {
   final ProjectModel project;
   final Viewer3DController? controller;
@@ -45,6 +46,9 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
 
   @override
   void dispose() {
+    try {
+      SystemChrome.setPreferredOrientations(DeviceOrientation.values);
+    } catch (_) {}
     if (widget.controller == null) {
       _controller.dispose();
     }
@@ -56,268 +60,331 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
     return ListenableBuilder(
       listenable: _controller,
       builder: (context, _) {
-        return Scaffold(
-          backgroundColor: AppColors.primary,
-          appBar: AppBar(
+        final bool isDynamic =
+            _controller.isDynamicViewActive && _controller.selectedElement != null;
+
+        return PopScope(
+          canPop: !isDynamic,
+          onPopInvokedWithResult: (didPop, _) {
+            if (!didPop && isDynamic) {
+              _controller.exitDynamicView();
+            }
+          },
+          child: Scaffold(
             backgroundColor: AppColors.primary,
-            elevation: 0,
-            leading: const BackButton(color: AppColors.surface),
-            title: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.project.name,
-                  style: const TextStyle(
-                    fontFamily: AppTypography.fontFamily,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.surface,
-                    letterSpacing: -0.2,
+            appBar: isDynamic
+                ? null
+                : AppBar(
+                    backgroundColor: AppColors.primary,
+                    elevation: 0,
+                    leading: const BackButton(color: AppColors.surface),
+                    title: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          widget.project.name,
+                          style: const TextStyle(
+                            fontFamily: AppTypography.fontFamily,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.surface,
+                            letterSpacing: -0.2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          '${widget.project.format} • ${widget.project.formattedSize}',
+                          style: AppTypography.bodySmall.copyWith(
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                    actions: [
+                      // Botão de Ativação do Modo de Medição de Vãos Livres
+                      Container(
+                        margin: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _controller.isMeasureMode
+                              ? AppColors.accent
+                              : Colors.white.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: _controller.isMeasureMode
+                                ? AppColors.surface
+                                : Colors.white.withValues(alpha: 0.20),
+                            width: 1.2,
+                          ),
+                        ),
+                        child: IconButton(
+                          tooltip: _controller.isMeasureMode
+                              ? 'Sair da Medição'
+                              : 'Modo de Medição (Vãos)',
+                          icon: const Icon(
+                            Icons.straighten_rounded,
+                            color: AppColors.surface,
+                            size: 20,
+                          ),
+                          onPressed: _controller.isViewerReady
+                              ? () {
+                                  HapticFeedback.mediumImpact();
+                                  _controller.toggleMeasureMode();
+                                }
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      // Botão de Plano de Corte Horizontal (Section Cut estilo BIM 360 / Fusion)
+                      Container(
+                        margin: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: _controller.isSectionCutActive
+                              ? AppColors.accent
+                              : Colors.white.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(
+                            color: _controller.isSectionCutActive
+                                ? AppColors.surface
+                                : Colors.white.withValues(alpha: 0.20),
+                            width: 1.2,
+                          ),
+                        ),
+                        child: IconButton(
+                          tooltip: _controller.isSectionCutActive
+                              ? 'Desativar Corte'
+                              : 'Plano de Corte ( Pavimentos )',
+                          icon: const Icon(
+                            Icons.content_cut_rounded,
+                            color: AppColors.surface,
+                            size: 19,
+                          ),
+                          onPressed: _controller.isViewerReady
+                              ? () {
+                                  HapticFeedback.mediumImpact();
+                                  _controller.toggleSectionCut();
+                                }
+                              : null,
+                        ),
+                      ),
+                      // Menu de Vistas Técnicas Predefinidas (ViewCube Autodesk Fusion / BIM 360)
+                      PopupMenuButton<String>(
+                        tooltip: 'Vistas Técnicas (ViewCube)',
+                        enabled: _controller.isViewerReady,
+                        icon: const Icon(Icons.view_in_ar_rounded, color: AppColors.surface),
+                        color: AppColors.surface,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        onSelected: (view) {
+                          HapticFeedback.selectionClick();
+                          _controller.setCameraView(view);
+                        },
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                            value: 'iso',
+                            child: Row(
+                              children: [
+                                Icon(Icons.threed_rotation_rounded, size: 18, color: AppColors.accent),
+                                SizedBox(width: 10),
+                                Text('Vista Isométrica (3D Home)'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'top',
+                            child: Row(
+                              children: [
+                                Icon(Icons.grid_on_rounded, size: 18, color: AppColors.primary),
+                                SizedBox(width: 10),
+                                Text('Planta / Topo (Superior)'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'front',
+                            child: Row(
+                              children: [
+                                Icon(Icons.crop_landscape_rounded, size: 18, color: AppColors.primary),
+                                SizedBox(width: 10),
+                                Text('Elevação Frontal'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'right',
+                            child: Row(
+                              children: [
+                                Icon(Icons.view_sidebar_rounded, size: 18, color: AppColors.primary),
+                                SizedBox(width: 10),
+                                Text('Elevação Lateral Direita'),
+                              ],
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'left',
+                            child: Row(
+                              children: [
+                                Icon(Icons.view_sidebar_outlined, size: 18, color: AppColors.primary),
+                                SizedBox(width: 10),
+                                Text('Elevação Lateral Esquerda'),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        tooltip: 'Resetar Câmera',
+                        icon: const Icon(Icons.center_focus_strong_rounded, color: AppColors.surface),
+                        onPressed:
+                            _controller.isViewerReady ? () => _controller.resetCamera() : null,
+                      ),
+                      IconButton(
+                        tooltip: 'Recarregar Modelo',
+                        icon: const Icon(Icons.refresh_rounded, color: AppColors.surface),
+                        onPressed: _controller.isViewerReady
+                            ? () => _controller.loadModelFile(
+                                  widget.project.filePath,
+                                  widget.project.format,
+                                )
+                            : null,
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                Text(
-                  '${widget.project.format} • ${widget.project.formattedSize}',
-                  style: AppTypography.bodySmall.copyWith(
-                    color: AppColors.textMuted,
-                  ),
-                ),
-              ],
+            body: LayoutBuilder(
+              builder: (context, constraints) {
+                final totalWidth = constraints.maxWidth > 0
+                    ? constraints.maxWidth
+                    : MediaQuery.of(context).size.width;
+                final leftViewportWidth = isDynamic
+                    ? (totalWidth * _controller.dynamicSplitRatio).clamp(160.0, totalWidth)
+                    : totalWidth;
+
+                return Stack(
+                  children: [
+                    // Viewport WebGL via InAppWebView: mantida fixa no slot 0 para redimensionar em tempo real sem recarregar o modelo 3D
+                    Positioned(
+                      top: 0,
+                      bottom: 0,
+                      left: 0,
+                      width: leftViewportWidth,
+                      child: InAppWebView(
+                        key: ValueKey('bim_webview_$_webViewRecreationId'),
+                        gestureRecognizers: {
+                          Factory<OneSequenceGestureRecognizer>(
+                            () => EagerGestureRecognizer(),
+                          ),
+                        },
+                        initialUrlRequest: URLRequest(
+                          url: WebUri('http://localhost:8080/index.html'),
+                        ),
+                        initialSettings: InAppWebViewSettings(
+                          javaScriptEnabled: true,
+                          allowFileAccessFromFileURLs: true,
+                          allowUniversalAccessFromFileURLs: true,
+                          isInspectable: kDebugMode,
+                          transparentBackground: true,
+                          supportZoom: false,
+                          disableVerticalScroll: true,
+                          disableHorizontalScroll: true,
+                          disallowOverScroll: true,
+                          mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
+                          useWideViewPort: true,
+                          loadWithOverviewMode: true,
+                        ),
+                        onWebViewCreated: (webViewController) {
+                          _controller.setWebViewController(webViewController);
+                        },
+                        onConsoleMessage: (controller, consoleMessage) {
+                          debugPrint(
+                            '[WebView Console] ${consoleMessage.messageLevel}: ${consoleMessage.message}',
+                          );
+                        },
+                        onReceivedError: (controller, request, error) {
+                          debugPrint('[WebView Error] ${request.url} - ${error.description}');
+                        },
+                        onWebContentProcessDidTerminate: (controller) async {
+                          debugPrint(
+                            '[WebView iOS onWebContentProcessDidTerminate] OOM WebKit recovery triggered',
+                          );
+                          _controller.handleRenderProcessGone(true);
+                        },
+                        onRenderProcessGone: (controller, detail) async {
+                          debugPrint('[WebView RenderProcessGone] didCrash: ${detail.didCrash}');
+                          _controller.handleRenderProcessGone(detail.didCrash);
+                        },
+                        onLoadStop: (webViewController, url) {
+                          // Injeta o arquivo do modelo assim que o index.html terminar o carregamento
+                          _controller.loadModelFile(
+                            widget.project.filePath,
+                            widget.project.format,
+                          );
+                        },
+                      ),
+                    ),
+
+                    // Workspace Horizontal da Visualização Dinâmica (Lado Direito + Divisória + HUD Esquerdo)
+                    if (isDynamic && !_controller.isLoading)
+                      DynamicBimWorkspace(
+                        controller: _controller,
+                        project: widget.project,
+                        totalWidth: totalWidth,
+                        leftViewportWidth: leftViewportWidth,
+                        onExit: () => _controller.exitDynamicView(),
+                      ),
+
+                    // Controle Deslizante de Plano de Corte Horizontal (Section Cut estilo BIM 360)
+                    if (!isDynamic &&
+                        _controller.isSectionCutActive &&
+                        !_controller.isLoading &&
+                        _controller.errorMessage == null)
+                      _buildSectionCutOverlay(),
+
+                    // Botão Flutuante de Fácil Acesso com Ícone do Olho para Elementos Ocultados
+                    if (!isDynamic &&
+                        _controller.hasHiddenElements &&
+                        !_controller.isLoading &&
+                        _controller.errorMessage == null &&
+                        !_controller.isMeasureMode)
+                      _buildFloatingHiddenEyeButton(),
+
+                    // TabBar de Ações Rápidas Estilo Nubank (exibida ao clicar em um elemento 3D fora do modo dinâmico)
+                    if (!isDynamic &&
+                        _controller.selectedElement != null &&
+                        !_controller.isLoading &&
+                        !_controller.isMeasureMode)
+                      NubankBimTabBar(
+                        metadata: _controller.selectedElement!,
+                        isIsolated: _controller.isElementIsolated(
+                          _controller.selectedElement!.expressID,
+                        ),
+                        onViewBimData: () {
+                          BimMetadataBottomSheet.show(
+                            context: context,
+                            metadata: _controller.selectedElement!,
+                          );
+                        },
+                        onHideElement: () => _handleHideElement(_controller.selectedElement!),
+                        onIsolateElement: () => _handleIsolateElement(_controller.selectedElement!),
+                        onDynamicView: () => _controller.enterDynamicView(),
+                        onClose: () => _controller.clearSelectedElement(),
+                      ),
+
+                    // Overlay do Modo de Medição de Vãos Livres (1 toque / ponto a ponto)
+                    if (!isDynamic && _controller.isMeasureMode && !_controller.isLoading)
+                      MeasureModeOverlay(
+                        controller: _controller,
+                        onClose: () => _controller.setMeasureMode(false),
+                      ),
+
+                    // Overlay de Carregamento e Progresso
+                    if (_controller.isLoading) _buildLoadingOverlay(),
+
+                    // Banner Defensivo de Erro
+                    if (_controller.errorMessage != null) _buildErrorOverlay(),
+                  ],
+                );
+              },
             ),
-            actions: [
-              // Botão de Ativação do Modo de Medição de Vãos Livres
-              Container(
-                margin: const EdgeInsets.symmetric(vertical: 8),
-                decoration: BoxDecoration(
-                  color: _controller.isMeasureMode
-                      ? AppColors.accent
-                      : Colors.white.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _controller.isMeasureMode
-                        ? AppColors.surface
-                        : Colors.white.withValues(alpha: 0.20),
-                    width: 1.2,
-                  ),
-                ),
-                child: IconButton(
-                  tooltip: _controller.isMeasureMode ? 'Sair da Medição' : 'Modo de Medição (Vãos)',
-                  icon: const Icon(
-                    Icons.straighten_rounded,
-                    color: AppColors.surface,
-                    size: 20,
-                  ),
-                  onPressed: _controller.isViewerReady
-                      ? () {
-                          HapticFeedback.mediumImpact();
-                          _controller.toggleMeasureMode();
-                        }
-                      : null,
-                ),
-              ),
-              const SizedBox(width: 4),
-              // Botão de Plano de Corte Horizontal (Section Cut estilo BIM 360 / Fusion)
-              Container(
-                margin: const EdgeInsets.symmetric(vertical: 8),
-                decoration: BoxDecoration(
-                  color: _controller.isSectionCutActive
-                      ? AppColors.accent
-                      : Colors.white.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(
-                    color: _controller.isSectionCutActive
-                        ? AppColors.surface
-                        : Colors.white.withValues(alpha: 0.20),
-                    width: 1.2,
-                  ),
-                ),
-                child: IconButton(
-                  tooltip: _controller.isSectionCutActive ? 'Desativar Corte' : 'Plano de Corte ( Pavimentos )',
-                  icon: const Icon(
-                    Icons.content_cut_rounded,
-                    color: AppColors.surface,
-                    size: 19,
-                  ),
-                  onPressed: _controller.isViewerReady
-                      ? () {
-                          HapticFeedback.mediumImpact();
-                          _controller.toggleSectionCut();
-                        }
-                      : null,
-                ),
-              ),
-              // Menu de Vistas Técnicas Predefinidas (ViewCube Autodesk Fusion / BIM 360)
-              PopupMenuButton<String>(
-                tooltip: 'Vistas Técnicas (ViewCube)',
-                enabled: _controller.isViewerReady,
-                icon: const Icon(Icons.view_in_ar_rounded, color: AppColors.surface),
-                color: AppColors.surface,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                onSelected: (view) {
-                  HapticFeedback.selectionClick();
-                  _controller.setCameraView(view);
-                },
-                itemBuilder: (context) => const [
-                  PopupMenuItem(
-                    value: 'iso',
-                    child: Row(
-                      children: [
-                        Icon(Icons.threed_rotation_rounded, size: 18, color: AppColors.accent),
-                        SizedBox(width: 10),
-                        Text('Vista Isométrica (3D Home)'),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'top',
-                    child: Row(
-                      children: [
-                        Icon(Icons.grid_on_rounded, size: 18, color: AppColors.primary),
-                        SizedBox(width: 10),
-                        Text('Planta / Topo (Superior)'),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'front',
-                    child: Row(
-                      children: [
-                        Icon(Icons.crop_landscape_rounded, size: 18, color: AppColors.primary),
-                        SizedBox(width: 10),
-                        Text('Elevação Frontal'),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'right',
-                    child: Row(
-                      children: [
-                        Icon(Icons.view_sidebar_rounded, size: 18, color: AppColors.primary),
-                        SizedBox(width: 10),
-                        Text('Elevação Lateral Direita'),
-                      ],
-                    ),
-                  ),
-                  PopupMenuItem(
-                    value: 'left',
-                    child: Row(
-                      children: [
-                        Icon(Icons.view_sidebar_outlined, size: 18, color: AppColors.primary),
-                        SizedBox(width: 10),
-                        Text('Elevação Lateral Esquerda'),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              IconButton(
-                tooltip: 'Resetar Câmera',
-                icon: const Icon(Icons.center_focus_strong_rounded, color: AppColors.surface),
-                onPressed: _controller.isViewerReady ? () => _controller.resetCamera() : null,
-              ),
-              IconButton(
-                tooltip: 'Recarregar Modelo',
-                icon: const Icon(Icons.refresh_rounded, color: AppColors.surface),
-                onPressed: _controller.isViewerReady
-                    ? () => _controller.loadModelFile(widget.project.filePath, widget.project.format)
-                    : null,
-              ),
-              const SizedBox(width: 8),
-            ],
-          ),
-          body: Stack(
-            children: [
-              // Viewport WebGL via InAppWebView com proteção contra queda do processo (onRenderProcessGone)
-              InAppWebView(
-                key: ValueKey('bim_webview_$_webViewRecreationId'),
-                gestureRecognizers: {
-                  Factory<OneSequenceGestureRecognizer>(
-                    () => EagerGestureRecognizer(),
-                  ),
-                },
-                initialUrlRequest: URLRequest(
-                  url: WebUri('http://localhost:8080/index.html'),
-                ),
-                initialSettings: InAppWebViewSettings(
-                  javaScriptEnabled: true,
-                  allowFileAccessFromFileURLs: true,
-                  allowUniversalAccessFromFileURLs: true,
-                  isInspectable: kDebugMode,
-                  transparentBackground: true,
-                  supportZoom: false,
-                  disableVerticalScroll: true,
-                  disableHorizontalScroll: true,
-                  disallowOverScroll: true,
-                  mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
-                  useWideViewPort: true,
-                  loadWithOverviewMode: true,
-                ),
-                onWebViewCreated: (webViewController) {
-                  _controller.setWebViewController(webViewController);
-                },
-                onConsoleMessage: (controller, consoleMessage) {
-                  debugPrint('[WebView Console] ${consoleMessage.messageLevel}: ${consoleMessage.message}');
-                },
-                onReceivedError: (controller, request, error) {
-                  debugPrint('[WebView Error] ${request.url} - ${error.description}');
-                },
-                onWebContentProcessDidTerminate: (controller) async {
-                  debugPrint('[WebView iOS onWebContentProcessDidTerminate] OOM WebKit recovery triggered');
-                  _controller.handleRenderProcessGone(true);
-                },
-                onRenderProcessGone: (controller, detail) async {
-                  debugPrint('[WebView RenderProcessGone] didCrash: ${detail.didCrash}');
-                  _controller.handleRenderProcessGone(detail.didCrash);
-                },
-                onLoadStop: (webViewController, url) {
-                  // Injeta o arquivo do modelo assim que o index.html terminar o carregamento
-                  _controller.loadModelFile(
-                    widget.project.filePath,
-                    widget.project.format,
-                  );
-                },
-              ),
-
-              // Controle Deslizante de Plano de Corte Horizontal (Section Cut estilo BIM 360)
-              if (_controller.isSectionCutActive && !_controller.isLoading && _controller.errorMessage == null)
-                _buildSectionCutOverlay(),
-
-              // Botão Flutuante de Fácil Acesso com Ícone do Olho para Elementos Ocultados
-              if (_controller.hasHiddenElements && !_controller.isLoading && _controller.errorMessage == null && !_controller.isMeasureMode)
-                _buildFloatingHiddenEyeButton(),
-
-              // TabBar de Ações Rápidas Estilo Nubank (exibida ao clicar em um elemento 3D fora do modo de medição)
-              if (_controller.selectedElement != null && !_controller.isLoading && !_controller.isMeasureMode)
-                NubankBimTabBar(
-                  metadata: _controller.selectedElement!,
-                  isIsolated: _controller.isElementIsolated(_controller.selectedElement!.expressID),
-                  onViewBimData: () {
-                    BimMetadataBottomSheet.show(
-                      context: context,
-                      metadata: _controller.selectedElement!,
-                    );
-                  },
-                  onHideElement: () => _handleHideElement(_controller.selectedElement!),
-                  onIsolateElement: () => _handleIsolateElement(_controller.selectedElement!),
-                  onClose: () => _controller.clearSelectedElement(),
-                ),
-
-              // Overlay do Modo de Medição de Vãos Livres (1 toque / ponto a ponto)
-              if (_controller.isMeasureMode && !_controller.isLoading)
-                MeasureModeOverlay(
-                  controller: _controller,
-                  onClose: () => _controller.setMeasureMode(false),
-                ),
-
-              // Overlay de Carregamento e Progresso
-              if (_controller.isLoading)
-                _buildLoadingOverlay(),
-
-              // Banner Defensivo de Erro
-              if (_controller.errorMessage != null)
-                _buildErrorOverlay(),
-            ],
           ),
         );
       },

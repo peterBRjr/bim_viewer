@@ -8,13 +8,14 @@ import '../../../../core/constants/app_typography.dart';
 import '../controllers/viewer_3d_controller.dart';
 
 /// Barra de ações inferior flutuante inspirada no estilo moderno e clean do app Nubank.
-/// Exibe uma cápsula escura minimalista com 3 opções em ícones e círculo roxo ativo.
+/// Exibe uma cápsula escura minimalista com opções rápidas e o botão de Visualização Dinâmica.
 class NubankBimTabBar extends StatefulWidget {
   final BimElementMetadata metadata;
   final bool isIsolated;
   final VoidCallback onViewBimData;
   final VoidCallback onHideElement;
   final VoidCallback onIsolateElement;
+  final VoidCallback? onDynamicView;
   final VoidCallback onClose;
 
   const NubankBimTabBar({
@@ -24,6 +25,7 @@ class NubankBimTabBar extends StatefulWidget {
     required this.onViewBimData,
     required this.onHideElement,
     required this.onIsolateElement,
+    this.onDynamicView,
     required this.onClose,
   });
 
@@ -36,7 +38,7 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
   late final Animation<double> _slideAnimation;
   late final Animation<double> _fadeAnimation;
 
-  // Índice da ação ativa (0: Dados BIM, 1: Ocultar, 2: Isolar)
+  // Índice da ação ativa (0: Dados BIM, 1: Ocultar, 2: Isolar, 3: Visualização Dinâmica)
   late int _activeIndex;
 
   @override
@@ -76,13 +78,14 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
     super.dispose();
   }
 
-  void _handleActionTap(int index, VoidCallback action) {
+  void _handleActionTap(int index, VoidCallback? action) {
+    if (action == null) return;
     HapticFeedback.selectionClick();
     setState(() {
       _activeIndex = index;
     });
 
-    // Pequeno delay para percepção da transição ativa do círculo roxo
+    // Pequeno delay para percepção da transição ativa do destaque azul
     Future.delayed(const Duration(milliseconds: 120), () {
       if (mounted) {
         action();
@@ -127,7 +130,7 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
                     child: Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF18181B).withValues(alpha: 0.65),
+                        color: const Color(0xFF18181B).withValues(alpha: 0.72),
                         borderRadius: BorderRadius.circular(36),
                         border: Border.all(
                           color: Colors.white.withValues(alpha: 0.14),
@@ -157,7 +160,7 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
                             activeColor: activeBlue,
                             onTap: () => _handleActionTap(0, widget.onViewBimData),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
 
                           // Opção 2: Ocultar Elemento
                           _NubankIconButton(
@@ -169,7 +172,7 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
                             activeColor: activeBlue,
                             onTap: () => _handleActionTap(1, widget.onHideElement),
                           ),
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
 
                           // Opção 3: Isolar Elemento (ou Restaurar se já isolado)
                           _NubankIconButton(
@@ -182,6 +185,21 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
                             isActive: _activeIndex == 2 || widget.isIsolated,
                             activeColor: activeBlue,
                             onTap: () => _handleActionTap(2, widget.onIsolateElement),
+                          ),
+
+                          const SizedBox(width: 8),
+                          Container(
+                            width: 1,
+                            height: 24,
+                            color: Colors.white.withValues(alpha: 0.14),
+                          ),
+                          const SizedBox(width: 8),
+
+                          // Opção 4 (Nova): Visualização Dinâmica Horizontal (Obra + Especificações + Níveis)
+                          _DynamicViewPillButton(
+                            isActive: _activeIndex == 3,
+                            activeColor: activeBlue,
+                            onTap: () => _handleActionTap(3, widget.onDynamicView),
                           ),
                         ],
                       ),
@@ -203,7 +221,7 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
         child: Container(
-          constraints: const BoxConstraints(maxWidth: 320),
+          constraints: const BoxConstraints(maxWidth: 340),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           decoration: BoxDecoration(
             color: const Color(0xFF18181B).withValues(alpha: 0.58),
@@ -297,8 +315,104 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
   }
 }
 
+/// Botão em cápsula dedicado para disparar a Visualização Dinâmica Horizontal.
+class _DynamicViewPillButton extends StatefulWidget {
+  final bool isActive;
+  final Color activeColor;
+  final VoidCallback onTap;
+
+  const _DynamicViewPillButton({
+    required this.isActive,
+    required this.activeColor,
+    required this.onTap,
+  });
+
+  @override
+  State<_DynamicViewPillButton> createState() => _DynamicViewPillButtonState();
+}
+
+class _DynamicViewPillButtonState extends State<_DynamicViewPillButton> {
+  bool _isPressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = widget.isActive;
+
+    return Tooltip(
+      message: 'Visualização Dinâmica (Horizontal)',
+      child: GestureDetector(
+        onTapDown: (_) => setState(() => _isPressed = true),
+        onTapUp: (_) => setState(() => _isPressed = false),
+        onTapCancel: () => setState(() => _isPressed = false),
+        onTap: widget.onTap,
+        behavior: HitTestBehavior.opaque,
+        child: AnimatedScale(
+          scale: _isPressed ? 0.92 : 1.0,
+          duration: const Duration(milliseconds: 100),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            height: 46,
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            decoration: BoxDecoration(
+              gradient: active
+                  ? LinearGradient(
+                      colors: [widget.activeColor, const Color(0xFF1D4ED8)],
+                    )
+                  : LinearGradient(
+                      colors: [
+                        widget.activeColor.withValues(alpha: 0.24),
+                        widget.activeColor.withValues(alpha: 0.14),
+                      ],
+                    ),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: active
+                    ? Colors.white.withValues(alpha: 0.35)
+                    : const Color(0xFF60A5FA).withValues(alpha: 0.45),
+                width: 1.0,
+              ),
+              boxShadow: active
+                  ? [
+                      BoxShadow(
+                        color: widget.activeColor.withValues(alpha: 0.45),
+                        blurRadius: 12,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : null,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.space_dashboard_rounded,
+                  size: 18,
+                  color: active ? Colors.white : const Color(0xFF93C5FD),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'Dinâmica',
+                  style: TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: active ? Colors.white : AppColors.surface,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Botão de ícone individual com estilo Nubank:
-/// Quando ativo, exibe círculo roxo vibrante; quando inativo, ícone clean e translúcido.
+/// Quando ativo, exibe círculo azul vibrante; quando inativo, ícone clean e translúcido.
 class _NubankIconButton extends StatefulWidget {
   final String tooltip;
   final IconData icon;

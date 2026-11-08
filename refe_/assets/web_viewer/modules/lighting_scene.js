@@ -81,6 +81,29 @@ function initScene(container) {
     depthWrite: false,
   });
 
+  // 7b. Material de Destaque Secundário para Peças Similares no Pavimento (Emerald #10B981)
+  state.secondaryHighlightMaterial = new THREE.MeshStandardMaterial({
+    color: 0x10B981,
+    roughness: 0.32,
+    metalness: 0.18,
+    emissive: 0x059669,
+    emissiveIntensity: 0.32,
+    depthTest: true,
+    transparent: true,
+    opacity: 0.84,
+  });
+
+  // 7c. Material Raio-X Arquitetônico para Contexto da Obra na Visualização Dinâmica
+  state.xrayContextMaterial = new THREE.MeshStandardMaterial({
+    color: 0x94A3B8,
+    roughness: 0.55,
+    metalness: 0.08,
+    transparent: true,
+    opacity: 0.14,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+
   // 8. Grupo Dedicado para Cotas e Medições Tridimensionais (Vãos Livres)
   state.measureGroup = new THREE.Group();
   state.measureGroup.name = 'Measurements';

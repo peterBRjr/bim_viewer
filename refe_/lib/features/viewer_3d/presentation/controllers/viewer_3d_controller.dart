@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import '../../../../core/services/localhost_server_service.dart';
@@ -40,6 +42,16 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   double _sectionCutRatio = 0.75;
   String _currentCameraView = 'iso';
   bool _renderProcessCrashed = false;
+
+  // Estado da Visualização Dinâmica Horizontal (Split-Screen Personalizável + Níveis + Specs openBIM)
+  bool _isDynamicViewActive = false;
+  double _dynamicSplitRatio = 0.46; // 46% Viewport 3D (perto da câmera) | 54% Especificações e Projeto
+  int? _selectedStoreyFilterId; // null = Todos os Níveis (Projeto Completo)
+  bool _highlightSimilarIn3D = false;
+  bool _isDynamicXrayActive = false;
+  BimProjectSpecs? _projectSpecs;
+  Timer? _orientationUnlockTimer;
+  Timer? _viewportResizeTimer;
 
   String? _pendingFilePath;
   String? _pendingFormat;
@@ -89,6 +101,15 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   String get currentCameraView => _currentCameraView;
   bool get renderProcessCrashed => _renderProcessCrashed;
 
+  // Getters da Visualização Dinâmica Horizontal
+  bool get isDynamicViewActive => _isDynamicViewActive;
+  double get dynamicSplitRatio => _dynamicSplitRatio;
+  int? get selectedStoreyFilterId => _selectedStoreyFilterId;
+  bool get highlightSimilarIn3D => _highlightSimilarIn3D;
+  bool get isDynamicXrayActive => _isDynamicXrayActive;
+  BimProjectSpecs? get projectSpecs => _projectSpecs;
+  List<BimStoreyInfo> get availableStoreys => _projectSpecs?.storeys ?? const [];
+
   /// Registra o InAppWebViewController e configura a JS Bridge bidirecional.
   void setWebViewController(InAppWebViewController controller) {
     _webViewController = controller;
@@ -97,6 +118,11 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   @override
   void dispose() {
+    _orientationUnlockTimer?.cancel();
+    _viewportResizeTimer?.cancel();
+    if (_isDynamicViewActive) {
+      _restorePortraitOrientationSafe(scheduleUnlock: false);
+    }
     _jsBridge.detach();
     super.dispose();
   }
@@ -127,13 +153,41 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   }
 
   @override
+  void onBimProjectSpecsLoaded(BimProjectSpecs specs) {
+    _projectSpecs = specs;
+    notifyListeners();
+  }
+
+  @override
   void onElementSelected(BimElementMetadata metadata) {
+    final previousId = _selectedElement?.expressID;
     _selectedElement = metadata;
+
+    if (_isDynamicViewActive) {
+      // Se o filtro atual apontava para um pavimento inexistente, reseta para Todos os Níveis
+      if (_selectedStoreyFilterId != null &&
+          availableStoreys.isNotEmpty &&
+          !availableStoreys.any((s) => s.expressID == _selectedStoreyFilterId)) {
+        _selectedStoreyFilterId = null;
+      }
+
+      if (previousId != metadata.expressID) {
+        _jsBridge.focusElementInDynamicView(metadata.expressID);
+      }
+      _syncDynamic3DHighlights();
+    }
+
     notifyListeners();
   }
 
   @override
   void onElementDeselected() {
+    // Na Visualização Dinâmica, protege contra toque acidental no fundo vazio enquanto orbita a peça na obra
+    if (_isDynamicViewActive && _selectedElement != null) {
+      _jsBridge.selectElementByExpressId(_selectedElement!.expressID, focusCamera: false);
+      return;
+    }
+
     if (_selectedElement != null) {
       _selectedElement = null;
       notifyListeners();
@@ -203,15 +257,169 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   }
 
   // =========================================================================
+  // COMANDOS DA VISUALIZAÇÃO DINÂMICA HORIZONTAL
+  // =========================================================================
+
+  /// Ativa a Visualização Dinâmica: gira a tela para horizontal (landscape com câmera à esquerda),
+  /// enquadra o elemento selecionado na obra e abre o painel divisível de especificações BIM e níveis.
+  Future<void> enterDynamicView() async {
+    if (_selectedElement == null) return;
+
+    _orientationUnlockTimer?.cancel();
+    _viewportResizeTimer?.cancel();
+    _isDynamicViewActive = true;
+    _isMeasureMode = false;
+    _selectedStoreyFilterId = null;
+    notifyListeners();
+
+    _lockLandscapeOrientationSafe();
+
+    final expressID = _selectedElement!.expressID;
+    await _jsBridge.focusElementInDynamicView(expressID);
+  }
+
+  /// Sai da Visualização Dinâmica, restaura a orientação vertical padrão e limpa destaques auxiliares.
+  Future<void> exitDynamicView() async {
+    if (!_isDynamicViewActive) return;
+
+    _isDynamicViewActive = false;
+    _highlightSimilarIn3D = false;
+    _isDynamicXrayActive = false;
+    notifyListeners();
+
+    await _jsBridge.clearSimilarHighlights();
+    await _jsBridge.setDynamicXrayContext(false, const []);
+    _restorePortraitOrientationSafe();
+
+    // Reajusta o tamanho do canvas WebGL após o retorno da rotação para retrato
+    _viewportResizeTimer?.cancel();
+    _viewportResizeTimer = Timer(const Duration(milliseconds: 300), () {
+      _jsBridge.notifyViewportResized();
+    });
+  }
+
+  /// Atualiza a proporção da divisória horizontal (entre 28% e 72% para a janela 3D à esquerda).
+  void setDynamicSplitRatio(double ratio) {
+    final clamped = ratio.clamp(0.28, 0.72);
+    if ((_dynamicSplitRatio - clamped).abs() < 0.002) return;
+    _dynamicSplitRatio = clamped;
+    notifyListeners();
+    _jsBridge.notifyViewportResized();
+  }
+
+  /// Restaura a proporção equilibrada padrão da divisória (46% 3D / 54% Especificações do Projeto).
+  void resetDynamicSplitRatio() {
+    _dynamicSplitRatio = 0.46;
+    notifyListeners();
+    _jsBridge.notifyViewportResized();
+    if (_selectedElement != null) {
+      _jsBridge.focusElementInDynamicView(_selectedElement!.expressID);
+    }
+  }
+
+  /// Altera o Nível (`IfcBuildingStorey`) selecionado no DropdownList da Visualização Dinâmica.
+  Future<void> setStoreyFilter(int? storeyId) async {
+    _selectedStoreyFilterId = storeyId;
+    notifyListeners();
+    await _syncDynamic3DHighlights();
+  }
+
+  /// Alterna o destaque 3D de todas as peças idênticas existentes no nível selecionado.
+  Future<void> toggleHighlightSimilarIn3D() async {
+    _highlightSimilarIn3D = !_highlightSimilarIn3D;
+    notifyListeners();
+    await _syncDynamic3DHighlights();
+  }
+
+  /// Alterna o modo Contexto Raio-X da Obra (edifício translúcido destacando a peça em inspeção).
+  Future<void> toggleDynamicXrayContext() async {
+    _isDynamicXrayActive = !_isDynamicXrayActive;
+    notifyListeners();
+    await _syncDynamic3DHighlights();
+  }
+
+  /// Reenquadra a câmera 3D diretamente sobre a peça atual na obra.
+  Future<void> focusCurrentElementInDynamicView() async {
+    if (_selectedElement == null) return;
+    await _jsBridge.focusElementInDynamicView(_selectedElement!.expressID);
+  }
+
+  /// Navega entre as instâncias da mesma peça no nível selecionado (ex: Peça 2 de 3) voando a câmera até ela.
+  Future<void> inspectPieceInstance(int expressID) async {
+    await _jsBridge.selectElementByExpressId(expressID, focusCamera: true);
+  }
+
+  Future<void> _syncDynamic3DHighlights() async {
+    final elem = _selectedElement;
+    if (elem == null) return;
+
+    final instancesInFilter = elem.analytics?.instancesForStorey(_selectedStoreyFilterId) ?? [elem.expressID];
+
+    if (_highlightSimilarIn3D && instancesInFilter.isNotEmpty) {
+      await _jsBridge.highlightSimilarElements(
+        instancesInFilter,
+        activeExpressID: elem.expressID,
+      );
+    } else {
+      await _jsBridge.clearSimilarHighlights();
+    }
+
+    if (_isDynamicXrayActive) {
+      final keepIds = _highlightSimilarIn3D && instancesInFilter.isNotEmpty
+          ? instancesInFilter
+          : [elem.expressID];
+      await _jsBridge.setDynamicXrayContext(true, keepIds);
+    } else {
+      await _jsBridge.setDynamicXrayContext(false, const []);
+    }
+  }
+
+  void _lockLandscapeOrientationSafe() {
+    try {
+      // landscapeLeft coloca o topo físico do aparelho (câmera frontal) à esquerda da tela horizontal
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]).catchError((_) {});
+    } catch (_) {}
+  }
+
+  void _restorePortraitOrientationSafe({bool scheduleUnlock = true}) {
+    try {
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+      ]).catchError((_) {});
+      if (scheduleUnlock) {
+        _orientationUnlockTimer?.cancel();
+        _orientationUnlockTimer = Timer(const Duration(milliseconds: 450), () {
+          if (!_isDynamicViewActive) {
+            try {
+              SystemChrome.setPreferredOrientations(DeviceOrientation.values).catchError((_) {});
+            } catch (_) {}
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  // =========================================================================
   // COMANDOS DE AÇÃO (FLUTTER -> JS BRIDGE)
   // =========================================================================
 
   /// Realiza streaming HTTP local (ou leitura direta) e injeta o modelo BIM no motor WebGL via JS.
   Future<void> loadModelFile(String filePath, String format) async {
+    if (_isDynamicViewActive) {
+      _isDynamicViewActive = false;
+      _restorePortraitOrientationSafe();
+    }
     _isLoading = true;
     _loadingProgress = 5.0;
     _errorMessage = null;
     _selectedElement = null;
+    _projectSpecs = null;
+    _selectedStoreyFilterId = null;
+    _highlightSimilarIn3D = false;
+    _isDynamicXrayActive = false;
     _hiddenElementIds.clear();
     _hiddenElementsMap.clear();
     _isolatedElementId = null;

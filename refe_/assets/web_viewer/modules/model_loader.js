@@ -216,6 +216,10 @@ function installSmartIfcPipeline(ifcManager) {
         const vCount = c.vCount;
         const expId = item.expressID;
 
+        if (typeof recordElementInstanceBounds === 'function' && c.bbox) {
+          recordElementInstanceBounds(expId, c.bbox, m);
+        }
+
         for (let v = 0; v < vCount; v++) {
           const s = v * 6;
           const d = (vOffset + v) * 3;
@@ -344,6 +348,9 @@ function loadBimArrayBuffer(arrayBuffer, format) {
   state.originalIndices = null;
   state.originalGroups = null;
   clearMeasurementsVisuals();
+  if (typeof resetBimAnalyticsState === 'function') {
+    resetBimAnalyticsState();
+  }
 
   if (cleanFormat === 'GLB' || cleanFormat === 'GLTF') {
     loadGltfModel(arrayBuffer);
@@ -460,6 +467,9 @@ function loadGltfModel(arrayBuffer) {
       state.isolatedElementId = null;
 
       fitModelToFrame(model);
+      if (typeof buildGltfFallbackSpecs === 'function') {
+        buildGltfFallbackSpecs(model);
+      }
 
       notifyFlutter('onLoadingProgress', { progress: 100 });
       const hudEl = document.getElementById('hud-text');
@@ -538,13 +548,19 @@ async function loadIfcModel(arrayBuffer) {
     // Enquadra a câmera técnica imediatamente antes de mapear agregados
     fitModelToFrame(ifcModel);
 
-    // Em modelos de menor porte, mapeia a hierarquia de agregados; em modelos gigantes, prioriza liberação imediata da UI
-    if (!state.isHeavyModel) {
-      try {
-        await buildHierarchyMaps(ifcModel.modelID);
-      } catch (e) {
-        console.warn('Erro ao construir mapa de hierarquia agregada:', e);
+    // Mapeia hierarquia de agregados, pavimentos (IfcBuildingStorey), tipos e especificações openBIM do arquivo
+    try {
+      await buildHierarchyMaps(ifcModel.modelID);
+    } catch (e) {
+      console.warn('Erro ao construir mapa de hierarquia agregada:', e);
+    }
+
+    try {
+      if (typeof extractModelBimMetadataAndSpatialIndex === 'function') {
+        await extractModelBimMetadataAndSpatialIndex(ifcModel.modelID);
       }
+    } catch (e) {
+      console.warn('Erro ao indexar metadados BIM e pavimentos:', e);
     }
 
     notifyFlutter('onLoadingProgress', { progress: 100 });

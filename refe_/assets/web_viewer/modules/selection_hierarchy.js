@@ -221,6 +221,24 @@ async function selectElement(hit) {
           };
         }
 
+        // Enriquecimento openBIM: Tipo, Qto, Materiais, Dimensões 3D e Quantitativo por Pavimento (Storey)
+        if (typeof enrichIfcElementPayload === 'function') {
+          const richPayload = await enrichIfcElementPayload(
+            object.modelID,
+            targetID,
+            name,
+            category,
+            psetsFormatted,
+            idsToHighlight,
+            Boolean(aggregate)
+          );
+          if (state.similarHighlightedIds && state.similarHighlightedIds.length > 0 && typeof highlightSimilarElements === 'function') {
+            highlightSimilarElements(richPayload.analytics?.allInstanceIds || [], targetID);
+          }
+          notifyFlutter('onElementSelected', richPayload);
+          return;
+        }
+
         notifyFlutter('onElementSelected', {
           expressID: targetID,
           name: name,
@@ -275,11 +293,32 @@ async function selectElement(hit) {
     }
   };
 
+  let gltfAnalytics = null;
+  let gltfDims = {};
+  if (typeof computePieceStoreyAnalytics === 'function') {
+    try {
+      gltfAnalytics = await computePieceStoreyAnalytics(undefined, expressID, elementName, category);
+      const box = getElementWorldBox(expressID);
+      if (!box.isEmpty()) {
+        const sz = box.getSize(new THREE.Vector3());
+        gltfDims = {
+          length: Number(Math.max(sz.x, sz.z).toFixed(3)),
+          width: Number(Math.min(sz.x, sz.z).toFixed(3)),
+          height: Number(sz.y.toFixed(3)),
+          minElevation: Number(box.min.y.toFixed(3)),
+          maxElevation: Number(box.max.y.toFixed(3)),
+        };
+      }
+    } catch (e) {}
+  }
+
   notifyFlutter('onElementSelected', {
     expressID: expressID,
     name: elementName,
     category: category,
     psets: psets,
+    geometricDimensions: gltfDims,
+    analytics: gltfAnalytics,
   });
 }
 

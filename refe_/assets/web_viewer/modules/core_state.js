@@ -48,6 +48,21 @@ const state = {
   activePivotElementId: null,
   gridHelper: null,
   archBumpTexture: null,
+  // Estado de Análise BIM, Pavimentos (Storeys) e Visualização Dinâmica
+  elementBounds: new Map(),
+  storeys: [],
+  elementToStorey: new Map(),
+  storeyToElements: new Map(),
+  elementToType: new Map(),
+  typeToElements: new Map(),
+  elementMetaIndex: new Map(),
+  bimProjectSpecs: null,
+  lengthUnitScale: 0.001,
+  secondaryHighlightMaterial: null,
+  xrayContextMaterial: null,
+  isDynamicXrayActive: false,
+  dynamicXrayKeepIds: new Set(),
+  similarHighlightedIds: [],
 };
 
 /**
