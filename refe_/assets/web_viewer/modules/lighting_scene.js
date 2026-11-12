@@ -9,7 +9,7 @@ window.BimEngine = window.BimEngine || {};
  */
 function initScene(container) {
   state.isLowSpecDevice = typeof detectHardwareProfile === 'function' ? detectHardwareProfile() : false;
-  const maxDpr = state.isLowSpecDevice ? 1.25 : 2.0;
+  const maxDpr = state.isLowSpecDevice ? 1.15 : 2.0;
   state.basePixelRatio = Math.min(window.devicePixelRatio || 1, maxDpr);
 
   // 1. Cena
@@ -18,9 +18,9 @@ function initScene(container) {
 
   // 2. Renderizador WebGL Adaptativo:
   // Em tablets de 4 GB / GPUs Tile-Based de entrada (ex: PowerVR GE8320), desativa logarithmicDepthBuffer
-  // para preservar o Hardware Early-Z (Hidden Surface Removal), multiplicando o FPS sem perder qualidade.
+  // e MSAA offscreen para preservar o Hardware Early-Z (Hidden Surface Removal) e eliminar gargalos de fillrate.
   state.renderer = new THREE.WebGLRenderer({
-    antialias: true,
+    antialias: !state.isLowSpecDevice,
     alpha: false,
     powerPreference: 'high-performance',
     precision: 'highp',

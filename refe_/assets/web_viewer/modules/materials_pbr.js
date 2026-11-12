@@ -131,8 +131,9 @@ function weldLosslessGeometry(vArr, iArr) {
 }
 
 /**
- * Gera um prisma 3D enxuto (24 vértices / 12 triângulos) com leve recuo (inset de 1.5%)
- * para evitar sobreposição coplanar e Z-fighting entre componentes repetitivos adjacentes.
+ * Gera um prisma 3D enxuto com leve recuo (inset de 1.5%) para evitar Z-fighting.
+ * Em tablets de 4 GB RAM (isLowSpecDevice), utiliza 8 vértices compartilhados nos cantos (reduzindo 3x os vértices na GPU)
+ * mantendo todas as 6 faces (12 triângulos / 36 índices) e seleção exata por ExpressID.
  */
 function createBoxLodGeometryData(bbox) {
   let [minX, minY, minZ, maxX, maxY, maxZ] = bbox;
@@ -142,6 +143,36 @@ function createBoxLodGeometryData(bbox) {
   minX += dx; maxX -= dx;
   minY += dy; maxY -= dy;
   minZ += dz; maxZ -= dz;
+
+  if (state && state.isLowSpecDevice) {
+    const inv = 0.57735;
+    const corners = [
+      [minX, minY, maxZ, -inv, -inv,  inv],
+      [maxX, minY, maxZ,  inv, -inv,  inv],
+      [maxX, maxY, maxZ,  inv,  inv,  inv],
+      [minX, maxY, maxZ, -inv,  inv,  inv],
+      [minX, minY, minZ, -inv, -inv, -inv],
+      [maxX, minY, minZ,  inv, -inv, -inv],
+      [maxX, maxY, minZ,  inv,  inv, -inv],
+      [minX, maxY, minZ, -inv,  inv, -inv],
+    ];
+    const vOut = new Float32Array(8 * 6);
+    for (let i = 0; i < 8; i++) {
+      const o = i * 6;
+      const c = corners[i];
+      vOut[o] = c[0]; vOut[o + 1] = c[1]; vOut[o + 2] = c[2];
+      vOut[o + 3] = c[3]; vOut[o + 4] = c[4]; vOut[o + 5] = c[5];
+    }
+    const iOut = new Uint32Array([
+      0, 1, 2,  0, 2, 3, // frente (+Z)
+      5, 4, 7,  5, 7, 6, // trás (-Z)
+      3, 2, 6,  3, 6, 7, // topo (+Y)
+      4, 5, 1,  4, 1, 0, // base (-Y)
+      1, 5, 6,  1, 6, 2, // direita (+X)
+      4, 0, 3,  4, 3, 7  // esquerda (-X)
+    ]);
+    return { vOut, iOut, vCount: 8 };
+  }
 
   const faces = [
     { n: [0, 0, 1],  v: [[minX, minY, maxZ], [maxX, minY, maxZ], [maxX, maxY, maxZ], [minX, maxY, maxZ]] },

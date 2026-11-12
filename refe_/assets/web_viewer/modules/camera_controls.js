@@ -47,7 +47,7 @@ function initCameraAndControls(container) {
         clearTimeout(restoreDprTimer);
         restoreDprTimer = null;
       }
-      state.renderer.setPixelRatio(Math.min(state.basePixelRatio || 1, 1.0));
+      state.renderer.setPixelRatio(Math.min(state.basePixelRatio || 1, 0.85));
     }
     if (typeof requestRender === 'function') requestRender(6);
   });
@@ -62,7 +62,7 @@ function initCameraAndControls(container) {
       restoreDprTimer = setTimeout(() => {
         restoreDprTimer = null;
         if (state.renderer) {
-          state.renderer.setPixelRatio(state.basePixelRatio || 1.25);
+          state.renderer.setPixelRatio(state.basePixelRatio || 1.15);
           if (typeof requestRender === 'function') requestRender(4);
         }
       }, 220);

@@ -56,6 +56,13 @@ class RecordingViewer3dJsBridge extends Viewer3dJsBridge {
   Future<void> clearSimilarHighlights() async {
     clearSimilarCalls++;
   }
+
+  bool? proximityEnabled;
+
+  @override
+  Future<void> setProximityDimensionEnabled(bool enabled) async {
+    proximityEnabled = enabled;
+  }
 }
 
 void main() {
@@ -980,6 +987,172 @@ void main() {
 
       await controller.exitDynamicView();
       await tester.pump(const Duration(milliseconds: 500));
+    });
+
+    group('Dynamic View Proximity Dimension Tests (<= 6.0m)', () {
+      test('ProximityDimensionModel parses map correctly and serializes symmetrically', () {
+        final rawMap = {
+          'targetExpressId': 2001,
+          'neighborExpressId': 1420,
+          'neighborType': 'Parede',
+          'neighborName': 'Alvenaria Bloco 15cm #1420',
+          'distanceMeters': 0.354,
+          'formattedDistance': '0.35 m',
+          'hasNeighbor': true,
+        };
+
+        final model = ProximityDimensionModel.fromMap(rawMap);
+        expect(model.targetExpressId, 2001);
+        expect(model.neighborExpressId, 1420);
+        expect(model.neighborType, 'Parede');
+        expect(model.neighborName, 'Alvenaria Bloco 15cm #1420');
+        expect(model.distanceMeters, 0.354);
+        expect(model.formattedDistance, '0.35 m');
+        expect(model.hasNeighbor, isTrue);
+        expect(model.toString(), '0.35 m até Parede');
+
+        final serialized = model.toMap();
+        expect(serialized['targetExpressId'], 2001);
+        expect(serialized['neighborExpressId'], 1420);
+        expect(serialized['neighborType'], 'Parede');
+        expect(serialized['distanceMeters'], 0.354);
+
+        final emptyMap = {
+          'targetExpressId': 2001,
+          'hasNeighbor': false,
+          'distanceMeters': 0.0,
+          'formattedDistance': 'Sem elementos a menos de 6 m',
+        };
+        final emptyModel = ProximityDimensionModel.fromMap(emptyMap);
+        expect(emptyModel.hasNeighbor, isFalse);
+        expect(emptyModel.toString(), 'Sem elementos a menos de 6 m');
+      });
+
+      test('Viewer3DController manages proximity dimension state and toggles', () async {
+        final bridge = RecordingViewer3dJsBridge();
+        final controller = Viewer3DController(jsBridge: bridge);
+        addTearDown(controller.dispose);
+        controller.onViewerReady();
+
+        expect(controller.showProximityDimension, isTrue);
+        expect(controller.proximityDimension, isNull);
+
+        final element = BimElementMetadata.fromMap({
+          'expressID': 501,
+          'name': 'Pilar Concreto #501',
+          'category': 'IfcColumn',
+        });
+        controller.onElementSelected(element);
+        await controller.enterDynamicView();
+        expect(controller.isDynamicViewActive, isTrue);
+
+        final prox = ProximityDimensionModel(
+          targetExpressId: 501,
+          neighborExpressId: 102,
+          neighborType: 'Parede',
+          neighborName: 'Parede Divisória #102',
+          distanceMeters: 0.28,
+          formattedDistance: '0.28 m',
+          hasNeighbor: true,
+        );
+
+        controller.onProximityDimensionCalculated(prox);
+        expect(controller.proximityDimension, equals(prox));
+
+        await controller.toggleProximityDimension();
+        expect(controller.showProximityDimension, isFalse);
+        expect(bridge.proximityEnabled, isFalse);
+
+        await controller.toggleProximityDimension();
+        expect(controller.showProximityDimension, isTrue);
+        expect(bridge.proximityEnabled, isTrue);
+
+        await controller.exitDynamicView();
+        expect(controller.isDynamicViewActive, isFalse);
+        expect(controller.proximityDimension, isNull);
+      });
+
+      testWidgets('DynamicBimWorkspace displays proximity dimension card with neighbor and distance', (WidgetTester tester) async {
+        final bridge = RecordingViewer3dJsBridge();
+        final controller = Viewer3DController(jsBridge: bridge);
+        addTearDown(controller.dispose);
+        controller.onViewerReady();
+
+        final elementMetadata = BimElementMetadata.fromMap({
+          'expressID': 7701,
+          'name': 'Bacia Sanitária Deca Vogue Plus',
+          'category': 'IfcFlowTerminal',
+          'psets': {
+            'Identificação': {'Tipo': 'Louça Sanitária'}
+          },
+          'analytics': {
+            'typeName': 'Bacia Sanitária',
+            'totalInProject': 12,
+            'totalCategoryInProject': 12,
+            'allInstanceIds': [7701],
+            'hostStoreyId': 100,
+            'hostStoreyName': 'Pavimento Térreo',
+          },
+        });
+
+        controller.onElementSelected(elementMetadata);
+        await controller.enterDynamicView();
+
+        final prox = ProximityDimensionModel(
+          targetExpressId: 7701,
+          neighborExpressId: 8812,
+          neighborType: 'Parede',
+          neighborName: 'Parede Hidráulica #8812',
+          distanceMeters: 0.18,
+          formattedDistance: '0.18 m',
+          hasNeighbor: true,
+        );
+        controller.onProximityDimensionCalculated(prox);
+
+        final project = ProjectModel(
+          id: 'proj-sanit',
+          name: 'sanitarios.ifc',
+          filePath: '/local/sanitarios.ifc',
+          fileSizeMB: 12.0,
+          format: 'IFC',
+          createdAt: DateTime(2026, 11, 8),
+        );
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) {
+                  return DynamicBimWorkspace(
+                    controller: controller,
+                    project: project,
+                    totalWidth: 1400,
+                    leftViewportWidth: 1400 * controller.dynamicSplitRatio,
+                    onExit: () => controller.exitDynamicView(),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('DISTÂNCIA AO ELEMENTO MAIS PRÓXIMO'), findsOneWidget);
+        expect(find.text('0.18 m'), findsOneWidget);
+        expect(find.textContaining('Parede Hidráulica #8812 (ID #8812)'), findsOneWidget);
+        expect(find.text('Cota 6m'), findsOneWidget);
+
+        // Testa o botão toggle Cota 6m no HUD da esquerda
+        final cotaToggle = find.text('Cota 6m');
+        await tester.tap(cotaToggle);
+        await tester.pump();
+        expect(controller.showProximityDimension, isFalse);
+        expect(bridge.proximityEnabled, isFalse);
+
+        await controller.exitDynamicView();
+        await tester.pumpAndSettle();
+      });
     });
   });
 }

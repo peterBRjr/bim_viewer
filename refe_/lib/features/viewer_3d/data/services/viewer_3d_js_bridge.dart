@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../../domain/models/bim_element_metadata.dart';
 import '../../domain/models/measurement_model.dart';
+import '../../domain/models/proximity_dimension_model.dart';
 
 /// Callbacks disparados por eventos ocorridos dentro da Viewport WebGL 3D.
 abstract class Viewer3dJsBridgeListener {
@@ -19,6 +20,7 @@ abstract class Viewer3dJsBridgeListener {
   void onMeasurementCleared();
   void onBimProjectSpecsLoaded(BimProjectSpecs specs);
   void onElementTransitionBusy(int expressID) {}
+  void onProximityDimensionCalculated(ProximityDimensionModel proximity) {}
 }
 
 /// Serviço responsável por encapsular a comunicação bidirecional (JS Bridge)
@@ -184,6 +186,18 @@ class Viewer3dJsBridge {
         _listener?.onElementTransitionBusy(expressId);
       },
     );
+
+    // 10. Cota 3D inteligente calculada entre o elemento focado e o elemento mais próximo (≤ 6.0m)
+    controller.addJavaScriptHandler(
+      handlerName: 'onProximityDimensionCalculated',
+      callback: (args) {
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          final proximity = ProximityDimensionModel.fromMap(data);
+          _listener?.onProximityDimensionCalculated(proximity);
+        }
+      },
+    );
   }
 
   // =========================================================================
@@ -330,6 +344,13 @@ class Viewer3dJsBridge {
   Future<void> notifyViewportResized() async {
     await _controller?.evaluateJavascript(
       source: 'if (window.notifyViewportResized) window.notifyViewportResized();',
+    );
+  }
+
+  /// Alterna a renderização da linha de cota 3D de proximidade (≤ 6.0m) na Visualização Dinâmica.
+  Future<void> setProximityDimensionEnabled(bool enabled) async {
+    await _controller?.evaluateJavascript(
+      source: 'if (window.setProximityDimensionEnabled) window.setProximityDimensionEnabled($enabled);',
     );
   }
 

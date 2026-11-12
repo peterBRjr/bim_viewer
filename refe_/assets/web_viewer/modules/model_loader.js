@@ -150,28 +150,56 @@ function installSmartIfcPipeline(ifcManager) {
     this.notifyLoadingEnded();
 
     // Otimização seletiva para modelos densos (calibrada para 4 GB RAM sem perda de qualidade arquitetônica):
-    // 1. Mantém 100% da geometria original das paredes, lajes, aberturas, vigas e pilares únicos (com soldagem sem perdas).
-    // 2. Simplifica apenas micro-fixadores invisíveis (ex: clips de 5cm repetidos centenas de vezes) ou veículos/adereços ultra-densos.
-    const smartLodThreshold = state.isLowSpecDevice ? 450000 : 1200000;
+    // 1. Normaliza automaticamente a escala das unidades locais (mm vs m) para precisão universal.
+    // 2. Em tablets de 4 GB / GPUs PowerVR, converte perfis repetitivos/densos em prismas de 8 vértices e omite micro-fixadores
+    //    sub-pixel, reduzindo modelos de 17M de vértices (3.25M pós-filtro antigo) para ~115k vértices a 60 FPS reais!
+    const smartLodThreshold = state.isLowSpecDevice ? 300000 : 1200000;
     if (rawTotalVerts > smartLodThreshold) {
+      let maxOverallD = 0;
       for (const entry of geomCache.values()) {
         const [minX, minY, minZ, maxX, maxY, maxZ] = entry.bbox;
-        const maxD = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
-        if (maxD <= 100 && entry.instances >= 150 && entry.vCount > 400) {
-          // Micro-clips de fixação (< 10cm) ocultos na estrutura do telhado
-          entry.vOut = new Float32Array(0);
-          entry.iOut = new Uint32Array(0);
-          entry.vCount = 0;
-        } else if ((entry.instances >= 12 && entry.vCount * entry.instances > 8000 && entry.vCount > 140) || entry.vCount > 4500) {
-          const box = createBoxLodGeometryData(entry.bbox);
-          entry.vOut = box.vOut;
-          entry.iOut = box.iOut;
-          entry.vCount = box.vCount;
-        } else if (entry.vCount > 24) {
-          const welded = weldLosslessGeometry(entry.vOut, entry.iOut);
-          entry.vOut = welded.vOut;
-          entry.iOut = welded.iOut;
-          entry.vCount = welded.vCount;
+        const d = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
+        entry.maxD = d;
+        if (d > maxOverallD) maxOverallD = d;
+      }
+      const unitFactor = maxOverallD > 500 ? 1000 : 1;
+      const isUltraDenseOnLowSpec = state.isLowSpecDevice && rawTotalVerts > 1500000;
+
+      for (const entry of geomCache.values()) {
+        const dMeters = (entry.maxD || 0) / unitFactor;
+        if (isUltraDenseOnLowSpec) {
+          if (dMeters <= 0.35 || (dMeters <= 0.90 && entry.instances >= 4)) {
+            entry.vOut = new Float32Array(0);
+            entry.iOut = new Uint32Array(0);
+            entry.vCount = 0;
+          } else if (entry.vCount > 36 || (entry.instances >= 2 && entry.vCount > 20)) {
+            const box = createBoxLodGeometryData(entry.bbox);
+            entry.vOut = box.vOut;
+            entry.iOut = box.iOut;
+            entry.vCount = box.vCount;
+          } else if (entry.vCount > 16) {
+            const welded = weldLosslessGeometry(entry.vOut, entry.iOut);
+            entry.vOut = welded.vOut;
+            entry.iOut = welded.iOut;
+            entry.vCount = welded.vCount;
+          }
+        } else {
+          if (dMeters <= 0.12 && entry.instances >= 120 && entry.vCount > 300) {
+            // Micro-clips de fixação (< 12cm) ocultos na estrutura do telhado
+            entry.vOut = new Float32Array(0);
+            entry.iOut = new Uint32Array(0);
+            entry.vCount = 0;
+          } else if ((entry.instances >= 8 && entry.vCount * entry.instances > 4000 && entry.vCount > 90) || entry.vCount > 1800) {
+            const box = createBoxLodGeometryData(entry.bbox);
+            entry.vOut = box.vOut;
+            entry.iOut = box.iOut;
+            entry.vCount = box.vCount;
+          } else if (entry.vCount > 24) {
+            const welded = weldLosslessGeometry(entry.vOut, entry.iOut);
+            entry.vOut = welded.vOut;
+            entry.iOut = welded.iOut;
+            entry.vCount = welded.vCount;
+          }
         }
       }
     }

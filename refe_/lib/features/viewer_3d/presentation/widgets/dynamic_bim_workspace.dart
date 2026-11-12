@@ -277,6 +277,19 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                         ),
                         const SizedBox(width: 4),
                         _buildHudMiniToggle(
+                          icon: Icons.straighten_rounded,
+                          label: 'Cota 6m',
+                          isActive: widget.controller.showProximityDimension,
+                          activeColor: const Color(0xFF38BDF8),
+                          onTap: isSwitching
+                              ? null
+                              : () {
+                                  HapticFeedback.selectionClick();
+                                  widget.controller.toggleProximityDimension();
+                                },
+                        ),
+                        const SizedBox(width: 4),
+                        _buildHudMiniToggle(
                           icon: Icons.auto_awesome_rounded,
                           label: 'Similares 3D',
                           isActive: widget.controller.highlightSimilarIn3D,
@@ -505,6 +518,13 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
                     const SizedBox(height: 12),
                   ],
 
+                  // BLOCO COTA: Cota Inteligente ao Elemento Mais Próximo (<= 6m)
+                  if (_activeFilter == DynamicPanelFilter.all ||
+                      _activeFilter == DynamicPanelFilter.elementSpecs) ...[
+                    _buildProximityDimensionCard(),
+                    const SizedBox(height: 12),
+                  ],
+
                   // BLOCO B: Especificações do Elemento com Boas Práticas openBIM
                   if (_activeFilter == DynamicPanelFilter.all ||
                       _activeFilter == DynamicPanelFilter.elementSpecs) ...[
@@ -693,6 +713,211 @@ class _DynamicBimWorkspaceState extends State<DynamicBimWorkspace> {
             );
           }).toList(),
         ),
+      ),
+    );
+  }
+
+  // ===========================================================================
+  // BLOCO COTA: COTA DE PROXIMIDADE INTELIGENTE (RAIO <= 6.0M)
+  // ===========================================================================
+
+  Widget _buildProximityDimensionCard() {
+    final proximity = widget.controller.proximityDimension;
+    final isEnabled = widget.controller.showProximityDimension;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isEnabled ? const Color(0xFF38BDF8).withValues(alpha: 0.40) : AppColors.border,
+          width: isEnabled ? 1.2 : 1.0,
+        ),
+        boxShadow: isEnabled
+            ? [
+                BoxShadow(
+                  color: const Color(0xFF38BDF8).withValues(alpha: 0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0284C7).withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(
+                  Icons.straighten_rounded,
+                  size: 16,
+                  color: Color(0xFF0284C7),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'DISTÂNCIA AO ELEMENTO MAIS PRÓXIMO',
+                      style: AppTypography.badgeLabel.copyWith(
+                        color: const Color(0xFF0284C7),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      'Varredura delimitada a raio <= 6,0 m',
+                      style: AppTypography.bodySmall.copyWith(
+                        color: AppColors.textMuted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Transform.scale(
+                scale: 0.75,
+                child: Switch(
+                  value: isEnabled,
+                  activeThumbColor: const Color(0xFF0284C7),
+                  onChanged: (val) {
+                    HapticFeedback.selectionClick();
+                    widget.controller.toggleProximityDimension();
+                  },
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Divider(height: 1, color: AppColors.border),
+          const SizedBox(height: 10),
+          if (proximity != null && proximity.hasNeighbor) ...[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Text(
+                  proximity.formattedDistance,
+                  style: const TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                    color: Color(0xFF0F172A),
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'até a face mais próxima',
+                  style: AppTypography.bodySmall.copyWith(
+                    color: AppColors.textMuted,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppColors.background,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppColors.border),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.near_me_rounded,
+                    size: 14,
+                    color: Color(0xFF0284C7),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '${proximity.neighborName.isNotEmpty ? proximity.neighborName : (proximity.neighborType.isNotEmpty ? proximity.neighborType : "Elemento Vizinho")} (ID #${proximity.neighborExpressId})',
+                      style: const TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textDark,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (proximity.neighborType.isNotEmpty) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF38BDF8).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        proximity.neighborType,
+                        style: const TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF0284C7),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ] else if (proximity != null && !proximity.hasNeighbor) ...[
+            Row(
+              children: [
+                const Icon(
+                  Icons.info_outline_rounded,
+                  size: 16,
+                  color: AppColors.textMuted,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Nenhum elemento construtivo a menos de 6,0 m neste pavimento.',
+                    style: AppTypography.bodySmall.copyWith(
+                      color: AppColors.textMuted,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ] else ...[
+            Row(
+              children: [
+                const Icon(
+                  Icons.radar_rounded,
+                  size: 16,
+                  color: Color(0xFF0284C7),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'Calculando proximidade espacial...',
+                  style: AppTypography.bodySmall.copyWith(
+                    color: AppColors.textMuted,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
       ),
     );
   }

@@ -91,6 +91,17 @@ function resetBimAnalyticsState() {
   state.similarSubsetSignature = '';
   state.preDynamicViewSnapshot = null;
   clearSimilarHighlights();
+  if (typeof clearProximityDimensionLine === 'function') {
+    clearProximityDimensionLine();
+  }
+  if (typeof restoreOccludedGhostMaterials === 'function') {
+    restoreOccludedGhostMaterials();
+  }
+  state.dynamicProximityGroup = null;
+  state.showDynamicProximity = true;
+  state.lastProximityData = null;
+  state.occludedGhostIds.clear();
+  state.occludedSavedMaterials.clear();
 }
 
 /**
@@ -131,8 +142,8 @@ async function ensureRelationIndexes(modelID) {
         const count = lines && typeof lines.size === 'function' ? lines.size() : 0;
 
         for (let i = 0; i < count; i++) {
-          if (i > 0 && i % 4000 === 0) {
-            await new Promise((r) => setTimeout(r, 0));
+          if (i > 0 && i % 450 === 0) {
+            await new Promise((r) => setTimeout(r, state.activePointers.size > 0 ? 40 : 0));
           }
           const relId = lines.get(i);
           const relMaybe = api.GetLine(modelID, relId, false);
@@ -172,8 +183,8 @@ async function ensureRelationIndexes(modelID) {
         const count = lines && typeof lines.size === 'function' ? lines.size() : 0;
 
         for (let i = 0; i < count; i++) {
-          if (i > 0 && i % 4000 === 0) {
-            await new Promise((r) => setTimeout(r, 0));
+          if (i > 0 && i % 450 === 0) {
+            await new Promise((r) => setTimeout(r, state.activePointers.size > 0 ? 40 : 0));
           }
           const relId = lines.get(i);
           const relMaybe = api.GetLine(modelID, relId, false);
@@ -710,7 +721,11 @@ async function extractModelBimMetadataAndSpatialIndex(modelID) {
     if (WebIFC.IFCRELDEFINESBYTYPE !== undefined) {
       const typeRels = await mgr.getAllItemsOfType(modelID, WebIFC.IFCRELDEFINESBYTYPE, true);
       if (Array.isArray(typeRels)) {
+        let typeIdx = 0;
         for (const rel of typeRels) {
+          if (++typeIdx % 80 === 0) {
+            await new Promise((r) => setTimeout(r, state.activePointers.size > 0 ? 40 : 0));
+          }
           const typeId = Number(rel.RelatingType?.value);
           if (isNaN(typeId)) continue;
 
@@ -765,9 +780,9 @@ async function extractModelBimMetadataAndSpatialIndex(modelID) {
   const categorySummary = {};
   let catIndex = 0;
   for (const eid of uniqueCanonicalElements) {
-    if (++catIndex % 350 === 0) {
-      // Libera brevemente a thread para manter a renderização a 60 FPS no tablet de 4 GB RAM
-      await new Promise((r) => setTimeout(r, 0));
+    if (++catIndex % 200 === 0) {
+      // Libera brevemente a thread (e dá prioridade total ao toque caso o usuário esteja girando a câmera)
+      await new Promise((r) => setTimeout(r, state.activePointers.size > 0 ? 40 : 0));
     }
     let cat = 'IfcBuildingElement';
     try {
@@ -805,13 +820,6 @@ async function extractModelBimMetadataAndSpatialIndex(modelID) {
   };
 
   notifyFlutter('onBimProjectSpecsLoaded', state.bimProjectSpecs);
-
-  // Pré-indexa em segundo plano (em fatias não-bloqueantes) todas as relações de Psets e Materiais O(1)
-  setTimeout(() => {
-    if (state.currentModel && state.currentModel.modelID === modelID) {
-      ensureRelationIndexes(modelID).catch(() => {});
-    }
-  }, 80);
 }
 
 /**
@@ -1340,8 +1348,686 @@ async function computePieceStoreyAnalytics(modelID, targetID, rawName, category)
 }
 
 /**
- * Posiciona e enquadra a câmera 3D de forma inteligente sobre o elemento na obra
- * para a Visualização Dinâmica (respeitando o aspect ratio da janela esquerda).
+ * Converte categoria bruta openBIM (ex: IFCWALLSTANDARDCASE) para rótulo legível em português.
+ */
+function getFriendlyBimCategoryName(cat) {
+  const c = String(cat || '').toUpperCase();
+  if (c.includes('WALL')) return 'Parede';
+  if (c.includes('WINDOW')) return 'Janela';
+  if (c.includes('DOOR')) return 'Porta';
+  if (c.includes('COLUMN')) return 'Pilar';
+  if (c.includes('BEAM')) return 'Viga';
+  if (c.includes('SLAB')) return 'Laje';
+  if (c.includes('FLOWTERMINAL')) return 'Ponto Sanitário';
+  if (c.includes('FURNISHING')) return 'Mobiliário';
+  if (c.includes('ROOF')) return 'Cobertura';
+  if (c.includes('STAIR')) return 'Escada';
+  if (c.includes('RAILING')) return 'Guarda-corpo';
+  if (c.includes('COVERING')) return 'Revestimento';
+  return 'Elemento';
+}
+
+/**
+ * Calcula a distância euclidiana exata mínima face-a-face entre duas caixas 3D (THREE.Box3)
+ * e retorna os dois pontos mais próximos nas superfícies das respectivas caixas.
+ */
+function getBoxesMinDistanceAndPoints(boxA, boxB) {
+  const pA = new THREE.Vector3();
+  const pB = new THREE.Vector3();
+  let distSq = 0;
+
+  // Eixo X
+  if (boxA.max.x < boxB.min.x) {
+    const d = boxB.min.x - boxA.max.x;
+    distSq += d * d;
+    pA.x = boxA.max.x;
+    pB.x = boxB.min.x;
+  } else if (boxB.max.x < boxA.min.x) {
+    const d = boxA.min.x - boxB.max.x;
+    distSq += d * d;
+    pA.x = boxA.min.x;
+    pB.x = boxB.max.x;
+  } else {
+    const mid = (Math.max(boxA.min.x, boxB.min.x) + Math.min(boxA.max.x, boxB.max.x)) * 0.5;
+    pA.x = mid;
+    pB.x = mid;
+  }
+
+  // Eixo Y
+  if (boxA.max.y < boxB.min.y) {
+    const d = boxB.min.y - boxA.max.y;
+    distSq += d * d;
+    pA.y = boxA.max.y;
+    pB.y = boxB.min.y;
+  } else if (boxB.max.y < boxA.min.y) {
+    const d = boxA.min.y - boxB.max.y;
+    distSq += d * d;
+    pA.y = boxA.min.y;
+    pB.y = boxB.max.y;
+  } else {
+    const mid = (Math.max(boxA.min.y, boxB.min.y) + Math.min(boxA.max.y, boxB.max.y)) * 0.5;
+    pA.y = mid;
+    pB.y = mid;
+  }
+
+  // Eixo Z
+  if (boxA.max.z < boxB.min.z) {
+    const d = boxB.min.z - boxA.max.z;
+    distSq += d * d;
+    pA.z = boxA.max.z;
+    pB.z = boxB.min.z;
+  } else if (boxB.max.z < boxA.min.z) {
+    const d = boxA.min.z - boxB.max.z;
+    distSq += d * d;
+    pA.z = boxA.min.z;
+    pB.z = boxB.max.z;
+  } else {
+    const mid = (Math.max(boxA.min.z, boxB.min.z) + Math.min(boxA.max.z, boxB.max.z)) * 0.5;
+    pA.z = mid;
+    pB.z = mid;
+  }
+
+  return {
+    distance: Math.sqrt(distSq),
+    pointA: pA,
+    pointB: pB,
+  };
+}
+
+/**
+ * Cria a textura dinâmica 2D renderizada em Canvas para o Badge de cota de proximidade da Visão Dinâmica
+ */
+function createProximitySprite(text) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 540;
+  canvas.height = 130;
+  const ctx = canvas.getContext('2d');
+
+  const r = 24;
+  const w = 528;
+  const h = 118;
+  const x = 6;
+  const y = 6;
+
+  // Fundo cápsula Dark Slate (#0F172A) com borda Sky Blue (#38BDF8)
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+  ctx.strokeStyle = '#38BDF8';
+  ctx.lineWidth = 5;
+
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Texto legível de alta resolução
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, w / 2 + x, h / 2 + y);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  const spriteMat = new THREE.SpriteMaterial({
+    map: texture,
+    depthTest: false,
+    transparent: true,
+  });
+  const sprite = new THREE.Sprite(spriteMat);
+  sprite.scale.set(1.45, 0.35, 1.0);
+  return sprite;
+}
+
+/**
+ * Descarta recursos de GPU (geometria, texturas e materiais) do grupo de cota de proximidade
+ */
+function clearProximityDimensionGroupOnly() {
+  if (!state.dynamicProximityGroup) return;
+  while (state.dynamicProximityGroup.children.length > 0) {
+    const child = state.dynamicProximityGroup.children[0];
+    state.dynamicProximityGroup.remove(child);
+    if (child.traverse) {
+      child.traverse((obj) => {
+        if (obj.geometry) obj.geometry.dispose();
+        if (obj.material) {
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach((m) => {
+              if (m.map) m.map.dispose();
+              m.dispose();
+            });
+          } else {
+            if (obj.material.map) obj.material.map.dispose();
+            obj.material.dispose();
+          }
+        }
+      });
+    }
+  }
+}
+
+/**
+ * Remove a cota tridimensional de proximidade do 3D e reseta o cache
+ */
+function clearProximityDimensionLine() {
+  clearProximityDimensionGroupOnly();
+  state.lastProximityData = null;
+  if (typeof requestRender === 'function') requestRender(2);
+}
+
+/**
+ * Localiza o elemento vizinho mais próximo logicamente relevante num raio máximo de 6.0 metros
+ * (restringindo estritamente aos elementos do mesmo nível/pavimento para máxima fluidez).
+ */
+function findNearestLogicalNeighbor(targetId, maxRadius = 6.0) {
+  const id = Number(targetId);
+  if (isNaN(id) || !state.currentModel) return null;
+
+  const targetBox = getElementWorldBox(id);
+  if (targetBox.isEmpty()) return null;
+
+  const targetAgg = state.parentToChildren.get(id) || state.childToParent.get(id);
+  const excludedIds = new Set([id]);
+  if (targetAgg) {
+    excludedIds.add(targetAgg.parentId);
+    if (Array.isArray(targetAgg.children)) {
+      for (const cid of targetAgg.children) excludedIds.add(cid);
+    }
+  }
+
+  const targetCat = (state.elementCategoryMap.get(id) || '').toUpperCase();
+  const targetMeta = state.elementMetaIndex.get(id);
+  const targetSig = (targetMeta?.sig || '').toLowerCase();
+
+  const isFixture = targetCat.includes('FLOWTERMINAL') || targetCat.includes('FURNISHING') ||
+    /patente|vaso|sanit|toilet|bacia|bide|lavat|pia|chuveiro/.test(targetSig);
+  const isOpening = targetCat.includes('WINDOW') || targetCat.includes('DOOR');
+
+  // Restringe a busca aos elementos do mesmo pavimento (reduz de milhares para poucas dezenas)
+  const storeyId = state.elementToStorey.get(id);
+  let candidateIds = null;
+  if (storeyId !== undefined && state.storeyToElements.has(storeyId)) {
+    candidateIds = state.storeyToElements.get(storeyId);
+  } else {
+    candidateIds = Array.from(state.elementBounds.keys());
+  }
+
+  const searchBox = targetBox.clone().expandByScalar(maxRadius);
+  let bestPriority = null;
+  let bestOverall = null;
+
+  for (const cid of candidateIds) {
+    if (excludedIds.has(cid)) continue;
+
+    const candBox = getElementWorldBox(cid);
+    if (candBox.isEmpty()) continue;
+    if (!searchBox.intersectsBox(candBox)) continue;
+
+    const { distance, pointA, pointB } = getBoxesMinDistanceAndPoints(targetBox, candBox);
+    if (distance > maxRadius) continue;
+
+    const candCat = (state.elementCategoryMap.get(cid) || '').toUpperCase();
+    const candMeta = state.elementMetaIndex.get(cid);
+    const candSig = (candMeta?.sig || '').toLowerCase();
+
+    // Prioridade lógica:
+    // - Para louças/patentes: Parede ou divisória de fundo
+    // - Para janelas/portas: Paredes de apoio ou pilares
+    // - Para paredes: Outras paredes, pilares ou lajes
+    let isPriority = false;
+    if (isFixture) {
+      isPriority = (candCat.includes('WALL') || /parede|divis|alvenaria|drywall|gesso/.test(candSig)) &&
+        !candCat.includes('SLAB');
+    } else if (isOpening) {
+      isPriority = candCat.includes('WALL') || candCat.includes('COLUMN');
+    } else {
+      isPriority = candCat.includes('WALL') || candCat.includes('COLUMN') || candCat.includes('SLAB');
+    }
+
+    const typeLabel = getFriendlyBimCategoryName(candCat);
+    const friendlyName = candMeta?.name
+      ? decodeIfcStepText(candMeta.name)
+      : `${typeLabel} #${cid}`;
+
+    const candRecord = {
+      targetExpressId: id,
+      neighborExpressId: cid,
+      neighborType: typeLabel,
+      neighborName: friendlyName,
+      distanceMeters: Number(distance.toFixed(3)),
+      formattedDistance: `${distance.toFixed(2).replace('.', ',')} m`,
+      pointTarget: pointA,
+      pointNeighbor: pointB,
+      hasNeighbor: true,
+    };
+
+    if (isPriority) {
+      if (!bestPriority || distance < bestPriority.distanceMeters) {
+        bestPriority = candRecord;
+      }
+    }
+    if (!bestOverall || distance < bestOverall.distanceMeters) {
+      bestOverall = candRecord;
+    }
+  }
+
+  const chosen = bestPriority || bestOverall;
+  if (chosen) {
+    return chosen;
+  }
+
+  return {
+    targetExpressId: id,
+    neighborExpressId: null,
+    neighborType: null,
+    neighborName: null,
+    distanceMeters: null,
+    formattedDistance: 'Sem elementos a menos de 6 m',
+    hasNeighbor: false,
+  };
+}
+
+/**
+ * Renderiza a linha de cota BIM 3D contínua (#38BDF8 Sky Blue) com traços perpendiculares
+ * de terminação e badge flutuante em metros conectado ao ponto mais próximo.
+ */
+function renderProximityDimensionLine(proxData) {
+  if (!state.scene) return;
+
+  if (!state.dynamicProximityGroup) {
+    state.dynamicProximityGroup = new THREE.Group();
+    state.dynamicProximityGroup.name = 'DynamicProximityGroup';
+    state.scene.add(state.dynamicProximityGroup);
+  }
+
+  clearProximityDimensionGroupOnly();
+
+  if (!state.showDynamicProximity || !proxData || !proxData.hasNeighbor || !proxData.pointTarget || !proxData.pointNeighbor) {
+    if (typeof requestRender === 'function') requestRender(2);
+    if (proxData) {
+      notifyFlutter('onProximityDimensionCalculated', {
+        targetExpressId: proxData.targetExpressId,
+        neighborExpressId: null,
+        neighborType: null,
+        neighborName: null,
+        distanceMeters: null,
+        formattedDistance: 'Sem elementos a menos de 6 m',
+        hasNeighbor: false,
+      });
+    }
+    return;
+  }
+
+  const P0 = proxData.pointTarget;
+  const P1 = proxData.pointNeighbor;
+  const dist = proxData.distanceMeters;
+  const colorHex = 0x38BDF8;
+
+  const group = new THREE.Group();
+  group.name = 'ProximityActiveVisual';
+
+  // 1. Esferas de ancoragem nos pontos inicial e final
+  const sphereGeom = new THREE.SphereGeometry(0.038, 16, 16);
+  const sphereMat = new THREE.MeshBasicMaterial({ color: colorHex, depthTest: false });
+
+  const s0 = new THREE.Mesh(sphereGeom, sphereMat);
+  s0.position.copy(P0);
+  s0.renderOrder = 10;
+  group.add(s0);
+
+  const s1 = new THREE.Mesh(sphereGeom, sphereMat);
+  s1.position.copy(P1);
+  s1.renderOrder = 10;
+  group.add(s1);
+
+  // 2. Linha contínua técnica de cota
+  const lineGeom = new THREE.BufferGeometry().setFromPoints([P0, P1]);
+  const lineMat = new THREE.LineBasicMaterial({
+    color: colorHex,
+    linewidth: 3,
+    depthTest: false,
+    transparent: true,
+    opacity: 0.95,
+  });
+  const line = new THREE.Line(lineGeom, lineMat);
+  line.renderOrder = 10;
+  group.add(line);
+
+  // 3. Ticks perpendiculares nas extremidades
+  const dir = P1.clone().sub(P0);
+  const len = dir.length();
+  if (len > 0.01) {
+    dir.normalize();
+    const up = Math.abs(dir.y) > 0.85 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    const perp = new THREE.Vector3().crossVectors(dir, up).normalize().multiplyScalar(0.09);
+
+    const tick0Geom = new THREE.BufferGeometry().setFromPoints([
+      P0.clone().sub(perp),
+      P0.clone().add(perp),
+    ]);
+    const tick1Geom = new THREE.BufferGeometry().setFromPoints([
+      P1.clone().sub(perp),
+      P1.clone().add(perp),
+    ]);
+    const tickMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2, depthTest: false });
+    const tick0 = new THREE.Line(tick0Geom, tickMat);
+    const tick1 = new THREE.Line(tick1Geom, tickMat);
+    tick0.renderOrder = 10;
+    tick1.renderOrder = 10;
+    group.add(tick0);
+    group.add(tick1);
+  }
+
+  // 4. Badge numérico flutuante (Billboard Sprite)
+  const midPoint = P0.clone().add(P1).multiplyScalar(0.5);
+  midPoint.y += 0.10;
+  const labelText = `↔ ${dist.toFixed(2).replace('.', ',')} m • ${proxData.neighborName}`;
+  const sprite = createProximitySprite(labelText);
+  sprite.position.copy(midPoint);
+  sprite.renderOrder = 11;
+  group.add(sprite);
+
+  state.dynamicProximityGroup.add(group);
+  if (typeof requestRender === 'function') requestRender(3);
+
+  // Notifica o Flutter para atualizar o painel de especificações
+  notifyFlutter('onProximityDimensionCalculated', {
+    targetExpressId: proxData.targetExpressId,
+    neighborExpressId: proxData.neighborExpressId,
+    neighborType: proxData.neighborType,
+    neighborName: proxData.neighborName,
+    distanceMeters: proxData.distanceMeters,
+    formattedDistance: proxData.formattedDistance,
+    hasNeighbor: true,
+  });
+}
+
+/**
+ * Ativa ou desativa a exibição da cota 3D de proximidade na viewport
+ */
+function setProximityDimensionEnabled(enabled) {
+  state.showDynamicProximity = Boolean(enabled);
+  if (!state.showDynamicProximity) {
+    clearProximityDimensionGroupOnly();
+  } else {
+    const id = state.selectedObject?.expressID;
+    if (id !== undefined && !isNaN(id)) {
+      const proximityData = findNearestLogicalNeighbor(id, 6.0);
+      state.lastProximityData = proximityData;
+      renderProximityDimensionLine(proximityData);
+    }
+  }
+  if (typeof requestRender === 'function') requestRender(2);
+}
+
+/**
+ * Testa se há obstruções (elementos intervenientes) entre a posição da câmera e o centro do elemento
+ */
+function testSightlineHasOcclusion(targetCenter, cameraPos, targetId) {
+  if (!state.currentModel) return false;
+  const dir = targetCenter.clone().sub(cameraPos);
+  const distance = dir.length();
+  if (distance < 0.35) return false;
+  dir.normalize();
+
+  const ray = new THREE.Raycaster(cameraPos, dir, 0.15, Math.max(0.2, distance - 0.20));
+  const hits = ray.intersectObjects([state.currentModel], true);
+  if (!Array.isArray(hits) || hits.length === 0) return false;
+
+  const targetAgg = state.parentToChildren.get(targetId) || state.childToParent.get(targetId);
+  const excludedIds = new Set([targetId]);
+  if (targetAgg) {
+    excludedIds.add(targetAgg.parentId);
+    if (Array.isArray(targetAgg.children)) {
+      for (const cid of targetAgg.children) excludedIds.add(cid);
+    }
+  }
+
+  for (const hit of hits) {
+    let hitId = null;
+    if (state.ifcLoader && hit.object?.geometry && hit.faceIndex !== undefined) {
+      try {
+        hitId = state.ifcLoader.ifcManager.getExpressId(hit.object.geometry, hit.faceIndex);
+      } catch (e) {}
+    } else if (hit.object) {
+      hitId = hit.object.userData?.expressID || hit.object.id;
+    }
+    if (hitId !== null && hitId !== undefined && !excludedIds.has(hitId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Restaura materiais originais modificados pelo auto-ghosting de linha de visada
+ */
+function restoreOccludedGhostMaterials() {
+  if (state.occludedGhostIds.size === 0 && state.occludedSavedMaterials.size === 0) return;
+
+  // 1. Caso IFC (remove o subset translúcido sobreposto)
+  if (state.ifcLoader && state.currentModel?.modelID !== undefined && state.xrayContextMaterial) {
+    try {
+      state.ifcLoader.ifcManager.removeSubset(state.currentModel.modelID, state.xrayContextMaterial);
+    } catch (e) {}
+  }
+
+  // 2. Caso GLTF / Malhas avulsas
+  if (state.occludedSavedMaterials.size > 0) {
+    for (const [mesh, savedMat] of state.occludedSavedMaterials.entries()) {
+      if (mesh && savedMat) {
+        mesh.material = savedMat;
+      }
+    }
+  }
+
+  state.occludedGhostIds.clear();
+  state.occludedSavedMaterials.clear();
+  if (typeof requestRender === 'function') requestRender(2);
+}
+
+/**
+ * Identifica e torna translúcidos (14% de opacidade) apenas os elementos que bloqueiam a visada da câmera
+ */
+function resolveSightlineOcclusions(targetCenter, cameraPos, targetId) {
+  restoreOccludedGhostMaterials();
+  if (!state.currentModel || !state.scene || state.isDynamicXrayActive) return;
+
+  const dir = targetCenter.clone().sub(cameraPos);
+  const distance = dir.length();
+  if (distance < 0.35) return;
+  dir.normalize();
+
+  const ray = new THREE.Raycaster(cameraPos, dir, 0.15, Math.max(0.2, distance - 0.20));
+  const hits = ray.intersectObjects([state.currentModel], true);
+  if (!Array.isArray(hits) || hits.length === 0) return;
+
+  const targetAgg = state.parentToChildren.get(targetId) || state.childToParent.get(targetId);
+  const excludedIds = new Set([targetId]);
+  if (targetAgg) {
+    excludedIds.add(targetAgg.parentId);
+    if (Array.isArray(targetAgg.children)) {
+      for (const cid of targetAgg.children) excludedIds.add(cid);
+    }
+  }
+
+  const occludingIds = new Set();
+  const occludingMeshes = [];
+
+  for (const hit of hits) {
+    let hitId = null;
+    if (state.ifcLoader && hit.object?.geometry && hit.faceIndex !== undefined) {
+      try {
+        hitId = state.ifcLoader.ifcManager.getExpressId(hit.object.geometry, hit.faceIndex);
+      } catch (e) {}
+    } else if (hit.object) {
+      hitId = hit.object.userData?.expressID || hit.object.id;
+    }
+
+    if (hitId !== null && hitId !== undefined && !excludedIds.has(hitId)) {
+      occludingIds.add(hitId);
+      if (hit.object && hit.object.isMesh && !state.ifcLoader) {
+        occludingMeshes.push(hit.object);
+      }
+    }
+  }
+
+  if (occludingIds.size === 0) return;
+
+  if (state.ifcLoader && state.currentModel.modelID !== undefined && state.xrayContextMaterial) {
+    try {
+      state.ifcLoader.ifcManager.createSubset({
+        modelID: state.currentModel.modelID,
+        ids: Array.from(occludingIds),
+        scene: state.scene,
+        removePrevious: true,
+        material: state.xrayContextMaterial,
+      });
+      state.occludedGhostIds = occludingIds;
+    } catch (e) {}
+  } else if (occludingMeshes.length > 0 && state.xrayContextMaterial) {
+    for (const mesh of occludingMeshes) {
+      if (!state.occludedSavedMaterials.has(mesh)) {
+        state.occludedSavedMaterials.set(mesh, mesh.material);
+      }
+      mesh.material = state.xrayContextMaterial;
+    }
+    state.occludedGhostIds = occludingIds;
+  }
+}
+
+/**
+ * Calcula a pose e enquadramento ideal da câmera 3D de acordo com a categoria semântica do elemento IFC
+ */
+function computeOptimalCameraPose(expressID, aspect, limitingFov) {
+  const id = Number(expressID ?? state.selectedObject?.expressID);
+  if (isNaN(id)) return null;
+
+  const elemBox = getElementWorldBox(id);
+  if (elemBox.isEmpty()) return null;
+
+  const elemCenter = elemBox.getCenter(new THREE.Vector3());
+  const elemSize = elemBox.getSize(new THREE.Vector3());
+  const maxElemDim = Math.max(elemSize.x, elemSize.y, elemSize.z, 0.6);
+
+  const modelCenter = getRootPivotTarget();
+  const rawCat = (state.elementCategoryMap.get(id) || '').toUpperCase();
+  const meta = state.elementMetaIndex.get(id);
+  const sig = (meta?.sig || '').toLowerCase();
+
+  const isWall = rawCat.includes('WALL');
+  const isOpening = rawCat.includes('WINDOW') || rawCat.includes('DOOR');
+  const isFixture = rawCat.includes('FLOWTERMINAL') || rawCat.includes('FURNISHING') ||
+    /patente|vaso|sanit|toilet|bacia|bide|lavat|pia|chuveiro/.test(sig);
+  const isColumn = rawCat.includes('COLUMN');
+  const isBeam = rawCat.includes('BEAM');
+
+  let viewDir = new THREE.Vector3();
+  let distMargin = 1.65;
+  let minDist = 2.0;
+  let maxDist = 90.0;
+
+  if (isWall) {
+    // Paredes: Perpendicular à face principal com 18º de inclinação isométrica e 15º de elevação
+    const isRunningX = elemSize.x >= elemSize.z;
+    if (isRunningX) {
+      const signZ = elemCenter.z >= modelCenter.z ? 1 : -1;
+      viewDir.set(0.28, 0.32, signZ * 0.90).normalize();
+    } else {
+      const signX = elemCenter.x >= modelCenter.x ? 1 : -1;
+      viewDir.set(signX * 0.90, 0.32, 0.28).normalize();
+    }
+    distMargin = 1.45;
+    minDist = 2.2;
+  } else if (isFixture) {
+    // Louças / Patentes: Visão frontal limpa elevada (26º) orientada para fora da parede de fundo
+    const nearest = findNearestLogicalNeighbor(id, 6.0);
+    let frontDir = null;
+    if (nearest && nearest.hasNeighbor && nearest.pointNeighbor) {
+      frontDir = new THREE.Vector3(
+        elemCenter.x - nearest.pointNeighbor.x,
+        0,
+        elemCenter.z - nearest.pointNeighbor.z
+      );
+    }
+    if (!frontDir || frontDir.lengthSq() < 0.01) {
+      frontDir = new THREE.Vector3(elemCenter.x - modelCenter.x, 0, elemCenter.z - modelCenter.z);
+    }
+    if (frontDir.lengthSq() < 0.01) {
+      frontDir.set(0.707, 0, 0.707);
+    } else {
+      frontDir.normalize();
+    }
+    viewDir.set(frontDir.x * 0.88, 0.46, frontDir.z * 0.88).normalize();
+    distMargin = 1.70;
+    minDist = 1.6;
+    maxDist = 4.8;
+  } else if (isOpening) {
+    // Janelas / Portas: Face livre do vão
+    const isRunningX = elemSize.x >= elemSize.z;
+    if (isRunningX) {
+      const signZ = elemCenter.z >= modelCenter.z ? 1 : -1;
+      viewDir.set(0.12, 0.22, signZ * 0.96).normalize();
+    } else {
+      const signX = elemCenter.x >= modelCenter.x ? 1 : -1;
+      viewDir.set(signX * 0.96, 0.22, 0.12).normalize();
+    }
+    distMargin = 1.50;
+    minDist = 1.8;
+    maxDist = 18.0;
+  } else {
+    // Pilares, Vigas e outros: 3/4 estrutural
+    let horiz = new THREE.Vector3(elemCenter.x - modelCenter.x, 0, elemCenter.z - modelCenter.z);
+    if (horiz.lengthSq() < 0.04) {
+      horiz.set(0.707, 0, 0.707);
+    } else {
+      horiz.normalize();
+      const angle = 0.52;
+      const rx = horiz.x * Math.cos(angle) - horiz.z * Math.sin(angle);
+      const rz = horiz.x * Math.sin(angle) + horiz.z * Math.cos(angle);
+      horiz.set(rx, 0, rz).normalize();
+    }
+    viewDir.set(horiz.x * 0.86, 0.50, horiz.z * 0.86).normalize();
+    distMargin = 1.65;
+    minDist = 2.0;
+  }
+
+  let dist = (maxElemDim / (2 * Math.tan(limitingFov / 2))) * distMargin;
+  dist = Math.max(minDist, Math.min(dist, maxDist));
+
+  // Testa ângulo oposto caso a visada principal esteja obstruída em paredes ou esquadrias
+  if ((isWall || isOpening) && state.currentModel) {
+    const primaryCamPos = elemCenter.clone().addScaledVector(viewDir, dist);
+    const altViewDir = new THREE.Vector3(-viewDir.x, viewDir.y, -viewDir.z).normalize();
+    const altCamPos = elemCenter.clone().addScaledVector(altViewDir, dist);
+
+    const primaryOccluded = testSightlineHasOcclusion(elemCenter, primaryCamPos, id);
+    if (primaryOccluded) {
+      const altOccluded = testSightlineHasOcclusion(elemCenter, altCamPos, id);
+      if (!altOccluded) {
+        viewDir.copy(altViewDir);
+      }
+    }
+  }
+
+  const targetCamPos = elemCenter.clone().addScaledVector(viewDir, dist);
+  return {
+    cameraPos: targetCamPos,
+    targetCenter: elemCenter,
+    dist: dist,
+  };
+}
+
+/**
+ * Posiciona e enquadra a câmera 3D com orientação semântica e anti-obstrução para a Visualização Dinâmica.
  */
 function focusElementForDynamicView(expressID, durationMs = 460) {
   if (!state.camera || !state.controls) return;
@@ -1351,54 +2037,29 @@ function focusElementForDynamicView(expressID, durationMs = 460) {
   const id = Number(expressID ?? state.selectedObject?.expressID);
   if (isNaN(id)) return;
 
-  const elemBox = getElementWorldBox(id);
-  if (elemBox.isEmpty()) return;
-
-  const elemCenter = elemBox.getCenter(new THREE.Vector3());
-  const elemSize = elemBox.getSize(new THREE.Vector3());
-  const maxElemDim = Math.max(elemSize.x, elemSize.y, elemSize.z, 0.6);
-
   const vFovRad = THREE.MathUtils.degToRad(state.camera.fov || 45);
   const aspect = Math.max(0.35, state.camera.aspect || (window.innerWidth / Math.max(1, window.innerHeight)));
   const hFovRad = 2 * Math.atan(Math.tan(vFovRad / 2) * aspect);
   const limitingFov = Math.min(vFovRad, hFovRad);
 
-  let dist = (maxElemDim / (2 * Math.tan(limitingFov / 2))) * 1.75;
-  dist = Math.max(2.1, Math.min(dist, 120));
+  const pose = computeOptimalCameraPose(id, aspect, limitingFov);
+  if (!pose) return;
 
-  state.camera.near = Math.max(0.05, Math.min(0.4, dist * 0.04));
+  state.camera.near = Math.max(0.05, Math.min(0.4, pose.dist * 0.04));
   state.camera.updateProjectionMatrix();
 
-  const modelCenter = getRootPivotTarget();
-  const outwardHoriz = new THREE.Vector3(
-    elemCenter.x - modelCenter.x,
-    0,
-    elemCenter.z - modelCenter.z
-  );
+  // Resolve qualquer elemento que obstrua a linha de visada
+  resolveSightlineOcclusions(pose.targetCenter, pose.cameraPos, id);
 
-  if (outwardHoriz.lengthSq() < 0.04) {
-    outwardHoriz.set(0.72, 0, 0.69);
-  } else {
-    outwardHoriz.normalize();
-    const angle = 0.42;
-    const cosA = Math.cos(angle);
-    const sinA = Math.sin(angle);
-    const rx = outwardHoriz.x * cosA - outwardHoriz.z * sinA;
-    const rz = outwardHoriz.x * sinA + outwardHoriz.z * cosA;
-    outwardHoriz.set(rx, 0, rz).normalize();
-  }
+  // Calcula e desenha a cota de proximidade em 3D (raio <= 6m)
+  const proximityData = findNearestLogicalNeighbor(id, 6.0);
+  state.lastProximityData = proximityData;
+  renderProximityDimensionLine(proximityData);
 
-  const viewDir = new THREE.Vector3(
-    outwardHoriz.x * 0.86,
-    0.50,
-    outwardHoriz.z * 0.86
-  ).normalize();
-
-  const targetCamPos = elemCenter.clone().addScaledVector(viewDir, dist);
-
+  // Anima a câmera para a posição ideal
   state.isElementPivotActive = true;
   state.activePivotElementId = id;
-  animateCameraTo(targetCamPos, elemCenter, durationMs);
+  animateCameraTo(pose.cameraPos, pose.targetCenter, durationMs);
 
   if (_dynamicResizeTimer) clearTimeout(_dynamicResizeTimer);
   _dynamicResizeTimer = setTimeout(() => {
@@ -1678,6 +2339,8 @@ function exitDynamicViewMode() {
   state.isDynamicViewActive = false;
   clearSimilarHighlights(true);
   setDynamicXrayContext(false, []);
+  clearProximityDimensionLine();
+  restoreOccludedGhostMaterials();
 
   const snap = state.preDynamicViewSnapshot;
   state.preDynamicViewSnapshot = null;
@@ -1828,6 +2491,14 @@ window.BimEngine.selectElementByExpressId = selectElementByExpressId;
 window.BimEngine.highlightSimilarElements = highlightSimilarElements;
 window.BimEngine.clearSimilarHighlights = clearSimilarHighlights;
 window.BimEngine.setDynamicXrayContext = setDynamicXrayContext;
+window.BimEngine.createProximitySprite = createProximitySprite;
+window.BimEngine.clearProximityDimensionLine = clearProximityDimensionLine;
+window.BimEngine.setProximityDimensionEnabled = setProximityDimensionEnabled;
+window.BimEngine.findNearestLogicalNeighbor = findNearestLogicalNeighbor;
+window.BimEngine.renderProximityDimensionLine = renderProximityDimensionLine;
+window.BimEngine.restoreOccludedGhostMaterials = restoreOccludedGhostMaterials;
+window.BimEngine.resolveSightlineOcclusions = resolveSightlineOcclusions;
+window.BimEngine.computeOptimalCameraPose = computeOptimalCameraPose;
 
 window.decodeIfcStepText = decodeIfcStepText;
 window.waitForNextRenderedFrame = waitForNextRenderedFrame;
@@ -1846,5 +2517,15 @@ window.selectElementByExpressId = selectElementByExpressId;
 window.highlightSimilarElements = highlightSimilarElements;
 window.clearSimilarHighlights = clearSimilarHighlights;
 window.setDynamicXrayContext = setDynamicXrayContext;
-window.notifyViewportResized = onWindowResize;
+window.createProximitySprite = createProximitySprite;
+window.clearProximityDimensionLine = clearProximityDimensionLine;
+window.setProximityDimensionEnabled = setProximityDimensionEnabled;
+window.findNearestLogicalNeighbor = findNearestLogicalNeighbor;
+window.renderProximityDimensionLine = renderProximityDimensionLine;
+window.restoreOccludedGhostMaterials = restoreOccludedGhostMaterials;
+window.resolveSightlineOcclusions = resolveSightlineOcclusions;
+window.computeOptimalCameraPose = computeOptimalCameraPose;
+window.notifyViewportResized = function() {
+  if (typeof onWindowResize === 'function') onWindowResize();
+};
 
