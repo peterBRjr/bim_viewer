@@ -77,6 +77,12 @@ const state = {
   similarHighlightedIds: [],
   similarSubsetSignature: '',
   preDynamicViewSnapshot: null,
+  // Cota de Proximidade e Anti-Obstrução da Visualização Dinâmica
+  dynamicProximityGroup: null,
+  showDynamicProximity: true,
+  lastProximityData: null,
+  occludedGhostIds: new Set(),
+  occludedSavedMaterials: new Map(),
 };
 
 /**

@@ -41,7 +41,7 @@ function getArchitecturalBumpTexture() {
     texture.minFilter = THREE.LinearMipmapLinearFilter;
     texture.magFilter = THREE.LinearFilter;
     if (state.renderer && state.renderer.capabilities) {
-      texture.anisotropy = Math.min(4, state.renderer.capabilities.getMaxAnisotropy() || 1);
+      texture.anisotropy = Math.min(8, state.renderer.capabilities.getMaxAnisotropy() || 1);
     }
     texture.needsUpdate = true;
     state.archBumpTexture = texture;

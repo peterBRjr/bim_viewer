@@ -2,7 +2,7 @@ name: Build iOS IPA (Sideloadly / AltStore)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ ios, main, master ]
   workflow_dispatch:
 
 jobs:

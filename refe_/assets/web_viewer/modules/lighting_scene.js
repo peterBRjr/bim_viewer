@@ -12,7 +12,7 @@ function initScene(container) {
   state.scene = new THREE.Scene();
   state.scene.background = new THREE.Color(0x0F172A); // Slate Dark do Design System
 
-  // 2. Renderizador WebGL de Alta Performance com Buffer de Profundidade Logarítmico (Zero Z-Fighting)
+  // 2. Renderizador WebGL Ultra-Retina para iOS (Apple Metal / WKWebView) com Buffer Logarítmico (Zero Z-Fighting)
   state.renderer = new THREE.WebGLRenderer({
     antialias: true,
     alpha: false,
@@ -21,7 +21,7 @@ function initScene(container) {
     logarithmicDepthBuffer: true
   });
   state.renderer.setSize(window.innerWidth, window.innerHeight);
-  state.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  state.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2.5));
   state.renderer.shadowMap.enabled = true;
   state.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   state.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -29,7 +29,7 @@ function initScene(container) {
   state.renderer.localClippingEnabled = true;
   container.appendChild(state.renderer.domElement);
 
-  // 3. Iluminação Técnica de Canteiro de Obras (Hemisphere + Sun + Fill + Ambient)
+  // 3. Iluminação Técnica de Canteiro de Obras (Hemisphere + Sun + Fill + Rim + Ambient)
   const hemiLight = new THREE.HemisphereLight(0xF8FAFC, 0x334155, 0.65);
   hemiLight.position.set(0, 100, 0);
   state.scene.add(hemiLight);
@@ -37,17 +37,22 @@ function initScene(container) {
   const ambientLight = new THREE.AmbientLight(0xffffff, 0.40);
   state.scene.add(ambientLight);
 
-  const mainDirLight = new THREE.DirectionalLight(0xFFFBEB, 0.90);
+  const mainDirLight = new THREE.DirectionalLight(0xFFFBEB, 0.92);
   mainDirLight.position.set(35, 65, 45);
   mainDirLight.castShadow = true;
   mainDirLight.shadow.mapSize.width = 2048;
   mainDirLight.shadow.mapSize.height = 2048;
   mainDirLight.shadow.bias = -0.0002;
+  mainDirLight.shadow.normalBias = 0.02;
   state.scene.add(mainDirLight);
 
-  const fillLight = new THREE.DirectionalLight(0xCBD5E1, 0.50);
+  const fillLight = new THREE.DirectionalLight(0xCBD5E1, 0.52);
   fillLight.position.set(-35, 30, -35);
   state.scene.add(fillLight);
+
+  const rimLight = new THREE.DirectionalLight(0xE2E8F0, 0.28);
+  rimLight.position.set(0, -40, -50);
+  state.scene.add(rimLight);
 
   // 4. Grid Técnico de Canteiro de Obras
   state.gridHelper = new THREE.GridHelper(40, 40, 0x2563EB, 0x1E293B);
