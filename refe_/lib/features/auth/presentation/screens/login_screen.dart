@@ -6,8 +6,8 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_typography.dart';
 import '../controllers/auth_controller.dart';
 
-/// Tela comercial de Autenticação e Cadastro Local com identidade visual
-/// inspirada em Engenharia Estrutural, Perfiis Metálicos em Aço e Maquetes Digitais BIM.
+/// Tela de Login e Cadastro Local com design clean, comercial e sóbrio
+/// em tons de cinza aço (#0F172A / #334155), azul (#2563EB) e branco (#FFFFFF).
 class LoginScreen extends StatefulWidget {
   final AuthController controller;
 
@@ -27,16 +27,12 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _displayNameController = TextEditingController();
-  final TextEditingController _roleController = TextEditingController(
-    text: 'Engenharia Estrutural & Aço',
-  );
 
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
     _displayNameController.dispose();
-    _roleController.dispose();
     super.dispose();
   }
 
@@ -86,7 +82,6 @@ class _LoginScreenState extends State<LoginScreen> {
         username: username,
         password: password,
         displayName: _displayNameController.text.trim(),
-        role: _roleController.text.trim(),
       );
     } else {
       await widget.controller.login(username, password);
@@ -99,68 +94,53 @@ class _LoginScreenState extends State<LoginScreen> {
       listenable: widget.controller,
       builder: (context, _) {
         final size = MediaQuery.of(context).size;
-        final isTabletOrWide = size.width >= 680;
 
         return Scaffold(
           backgroundColor: AppColors.background,
           body: Stack(
             children: [
-              // 1. Painel Superior Metálico / Blueprint de Engenharia Estrutural & Aço
+              // 1. Painel Superior em Cinza Aço & Azul com Malha Estrutural Discreta
               Positioned(
                 top: 0,
                 left: 0,
                 right: 0,
-                height: math.max(320, size.height * 0.44),
+                height: math.max(280, size.height * 0.40),
                 child: Container(
                   decoration: const BoxDecoration(
                     gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        Color(0xFF0F172A), // Slate 900
-                        Color(0xFF1E293B), // Steel Slate 800
-                        Color(0xFF1D4ED8), // Structural Royal Blue
+                        Color(0xFF0F172A),
+                        Color(0xFF1E293B),
+                        Color(0xFF1D4ED8),
                       ],
-                      stops: [0.0, 0.62, 1.0],
+                      stops: [0.0, 0.68, 1.0],
                     ),
                   ),
                   child: CustomPaint(
                     painter: _SteelStructureBlueprintPainter(),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                          colors: [
-                            Colors.transparent,
-                            const Color(0xFF0F172A).withValues(alpha: 0.45),
-                          ],
-                        ),
-                      ),
-                    ),
                   ),
                 ),
               ),
 
-              // 2. Conteúdo Principal Responsivo
+              // 2. Conteúdo Centralizado Clean
               SafeArea(
                 child: Center(
                   child: SingleChildScrollView(
-                    padding: EdgeInsets.symmetric(
-                      horizontal: isTabletOrWide ? 36 : 20,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
                       vertical: 20,
                     ),
                     child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 460),
+                      constraints: const BoxConstraints(maxWidth: 400),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          _buildEngineeringHeader(),
-                          const SizedBox(height: 22),
+                          _buildCleanHeader(),
+                          const SizedBox(height: 24),
                           _buildAuthCard(),
-                          const SizedBox(height: 18),
-                          _buildTechnicalFooter(),
                         ],
                       ),
                     ),
@@ -174,108 +154,52 @@ class _LoginScreenState extends State<LoginScreen> {
     );
   }
 
-  Widget _buildEngineeringHeader() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+  Widget _buildCleanHeader() {
+    return Row(
       children: [
-        // Badge Metálico de Engenharia e Aço
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
-            color: const Color(0xFF1E293B).withValues(alpha: 0.85),
-            borderRadius: BorderRadius.circular(20),
+            color: AppColors.accent,
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: const Color(0xFF38BDF8).withValues(alpha: 0.45),
+              color: Colors.white.withValues(alpha: 0.22),
             ),
           ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
+          child: const Icon(
+            Icons.view_in_ar_rounded,
+            color: Colors.white,
+            size: 24,
+          ),
+        ),
+        const SizedBox(width: 14),
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(
-                Icons.precision_manufacturing_rounded,
-                size: 14,
-                color: Color(0xFF38BDF8),
+              Text(
+                'Visualizador BIM',
+                style: TextStyle(
+                  fontFamily: AppTypography.fontFamily,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                  letterSpacing: -0.5,
+                ),
               ),
-              SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  'ENGENHARIA ESTRUTURAL & AÇO • OPENBIM 3D',
-                  style: TextStyle(
-                    fontFamily: AppTypography.fontFamily,
-                    fontSize: 10.5,
-                    fontWeight: FontWeight.w800,
-                    color: Color(0xFFE2E8F0),
-                    letterSpacing: 0.6,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+              SizedBox(height: 2),
+              Text(
+                'Engenharia Estrutural & Modelos 3D',
+                style: TextStyle(
+                  fontFamily: AppTypography.fontFamily,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFFCBD5E1),
                 ),
               ),
             ],
           ),
-        ),
-        const SizedBox(height: 14),
-        Row(
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
-                ),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: Colors.white.withValues(alpha: 0.25),
-                  width: 1.2,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF2563EB).withValues(alpha: 0.35),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.view_in_ar_rounded,
-                color: Colors.white,
-                size: 26,
-              ),
-            ),
-            const SizedBox(width: 14),
-            const Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Visualizador BIM',
-                    style: TextStyle(
-                      fontFamily: AppTypography.fontFamily,
-                      fontSize: 26,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                      letterSpacing: -0.6,
-                      height: 1.1,
-                    ),
-                  ),
-                  SizedBox(height: 4),
-                  Text(
-                    'Inspeção de Estruturas Metálicas, Concreto e Projetos IFC em Alta Precisão',
-                    style: TextStyle(
-                      fontFamily: AppTypography.fontFamily,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w500,
-                      color: Color(0xFFCBD5E1),
-                      height: 1.3,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ),
       ],
     );
@@ -289,41 +213,38 @@ class _LoginScreenState extends State<LoginScreen> {
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.border, width: 1.2),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF0F172A).withValues(alpha: 0.10),
-            blurRadius: 28,
-            offset: const Offset(0, 12),
+            color: const Color(0xFF0F172A).withValues(alpha: 0.08),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
           ),
         ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Seletor Segmentado: Entrar | Criar Conta
+          // Toggle Clean: Entrar | Criar Conta
           Container(
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
               color: const Color(0xFFF1F5F9),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.border),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
                 Expanded(
                   child: _buildModeTabButton(
-                    label: 'Acessar Conta',
-                    icon: Icons.login_rounded,
+                    label: 'Entrar',
                     isSelected: !_isRegisterMode,
                     onTap: () => _toggleMode(false),
                   ),
                 ),
                 Expanded(
                   child: _buildModeTabButton(
-                    label: 'Cadastrar',
-                    icon: Icons.person_add_alt_1_rounded,
+                    label: 'Criar Conta',
                     isSelected: _isRegisterMode,
                     onTap: () => _toggleMode(true),
                   ),
@@ -333,46 +254,14 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 20),
 
-          // Título Contextual
-          Text(
-            _isRegisterMode
-                ? 'Cadastro de Credencial Técnica'
-                : 'Acesso ao Ambiente de Engenharia',
-            style: const TextStyle(
-              fontFamily: AppTypography.fontFamily,
-              fontSize: 17,
-              fontWeight: FontWeight.w800,
-              color: AppColors.textDark,
-              letterSpacing: -0.3,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            _isRegisterMode
-                ? 'Registro local instantâneo estruturado para sincronização futura.'
-                : 'Entre com suas credenciais para acessar o catálogo e a maquete 3D.',
-            style: AppTypography.bodySmall.copyWith(
-              color: AppColors.textMuted,
-              fontSize: 12.5,
-            ),
-          ),
-          const SizedBox(height: 18),
-
           if (_isRegisterMode) ...[
             _buildInputField(
               key: const ValueKey('register_name_field'),
               controller: _displayNameController,
-              label: 'Nome do Profissional / Engenheiro',
-              hint: 'Ex: Eng. Pedro',
+              label: 'Nome',
+              hint: 'Seu nome',
               icon: Icons.badge_outlined,
-            ),
-            const SizedBox(height: 14),
-            _buildInputField(
-              key: const ValueKey('register_role_field'),
-              controller: _roleController,
-              label: 'Especialidade / Setor',
-              hint: 'Ex: Estruturas Metálicas & BIM',
-              icon: Icons.engineering_outlined,
+              textInputAction: TextInputAction.next,
             ),
             const SizedBox(height: 14),
           ],
@@ -380,8 +269,8 @@ class _LoginScreenState extends State<LoginScreen> {
           _buildInputField(
             key: const ValueKey('login_username_field'),
             controller: _usernameController,
-            label: 'Login de Acesso',
-            hint: 'Digite seu login (ex: pedro)',
+            label: 'Login',
+            hint: 'Digite seu login',
             icon: Icons.person_outline_rounded,
             textInputAction: TextInputAction.next,
           ),
@@ -397,7 +286,8 @@ class _LoginScreenState extends State<LoginScreen> {
             textInputAction: TextInputAction.done,
             onSubmitted: (_) => _handleSubmit(),
             suffixIcon: IconButton(
-              onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+              onPressed: () =>
+                  setState(() => _obscurePassword = !_obscurePassword),
               icon: Icon(
                 _obscurePassword
                     ? Icons.visibility_outlined
@@ -409,54 +299,32 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
 
           if (errorMsg != null) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: AppColors.destructive.withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: AppColors.destructive.withValues(alpha: 0.35),
-                ),
+            const SizedBox(height: 12),
+            Text(
+              errorMsg,
+              style: const TextStyle(
+                fontFamily: AppTypography.fontFamily,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: AppColors.destructive,
               ),
-              child: Row(
-                children: [
-                  const Icon(
-                    Icons.error_outline_rounded,
-                    size: 18,
-                    color: AppColors.destructive,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      errorMsg,
-                      style: const TextStyle(
-                        fontFamily: AppTypography.fontFamily,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.destructive,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
+              textAlign: TextAlign.center,
             ),
           ],
 
           const SizedBox(height: 20),
 
-          // Botão Primário em Azul Royal & Aço
           SizedBox(
-            height: 50,
+            height: 48,
             child: ElevatedButton(
               key: const ValueKey('login_submit_button'),
               onPressed: isLoading ? null : _handleSubmit,
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.accent,
                 foregroundColor: Colors.white,
-                elevation: 2,
+                elevation: 0,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(11),
                 ),
               ),
               child: isLoading
@@ -468,93 +336,39 @@ class _LoginScreenState extends State<LoginScreen> {
                         color: Colors.white,
                       ),
                     )
-                  : Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          _isRegisterMode
-                              ? Icons.verified_user_rounded
-                              : Icons.arrow_forward_rounded,
-                          size: 19,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          _isRegisterMode
-                              ? 'Concluir Cadastro e Entrar'
-                              : 'Entrar na Plataforma 3D',
-                          style: const TextStyle(
-                            fontFamily: AppTypography.fontFamily,
-                            fontSize: 14.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.2,
-                          ),
-                        ),
-                      ],
+                  : Text(
+                      _isRegisterMode ? 'Cadastrar e Entrar' : 'Entrar',
+                      style: const TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
             ),
           ),
 
           if (!_isRegisterMode) ...[
-            const SizedBox(height: 16),
-            // Atalho inteligente para credencial padrão de homologação (pedro / 1234)
-            InkWell(
-              key: const ValueKey('quick_fill_credentials_button'),
-              onTap: _fillDefaultCredentials,
-              borderRadius: BorderRadius.circular(10),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8FAFC),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: const Color(0xFFCBD5E1)),
+            const SizedBox(height: 12),
+            Center(
+              child: TextButton(
+                key: const ValueKey('quick_fill_credentials_button'),
+                onPressed: _fillDefaultCredentials,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.textMuted,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        color: AppColors.accent.withValues(alpha: 0.10),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Icon(
-                        Icons.key_rounded,
-                        size: 15,
-                        color: AppColors.accent,
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Credencial Oficial de Engenharia',
-                            style: TextStyle(
-                              fontFamily: AppTypography.fontFamily,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              color: AppColors.textDark,
-                            ),
-                          ),
-                          SizedBox(height: 1),
-                          Text(
-                            'Login: pedro  •  Senha: 1234 (Toque para preencher)',
-                            style: TextStyle(
-                              fontFamily: AppTypography.fontFamily,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.textMuted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(
-                      Icons.touch_app_rounded,
-                      size: 16,
-                      color: AppColors.accent,
-                    ),
-                  ],
+                child: const Text(
+                  'Acesso padrão: pedro • 1234',
+                  style: TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
             ),
@@ -566,7 +380,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Widget _buildModeTabButton({
     required String label,
-    required IconData icon,
     required bool isSelected,
     required VoidCallback onTap,
   }) {
@@ -574,39 +387,20 @@ class _LoginScreenState extends State<LoginScreen> {
       onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(vertical: 9),
         decoration: BoxDecoration(
           color: isSelected ? AppColors.primary : Colors.transparent,
-          borderRadius: BorderRadius.circular(9),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: AppColors.primary.withValues(alpha: 0.18),
-                    blurRadius: 6,
-                    offset: const Offset(0, 2),
-                  ),
-                ]
-              : null,
+          borderRadius: BorderRadius.circular(8),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 15,
-              color: isSelected ? Colors.white : AppColors.textMuted,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              label,
-              style: TextStyle(
-                fontFamily: AppTypography.fontFamily,
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-                color: isSelected ? Colors.white : AppColors.textMuted,
-              ),
-            ),
-          ],
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            color: isSelected ? Colors.white : AppColors.textMuted,
+          ),
         ),
       ),
     );
@@ -657,141 +451,70 @@ class _LoginScreenState extends State<LoginScreen> {
               fontWeight: FontWeight.w400,
               color: Color(0xFF94A3B8),
             ),
-            prefixIcon: Icon(icon, size: 19, color: const Color(0xFF475569)),
+            prefixIcon: Icon(icon, size: 19, color: const Color(0xFF64748B)),
             suffixIcon: suffixIcon,
             filled: true,
             fillColor: const Color(0xFFF8FAFC),
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 14,
-              vertical: 13,
+              vertical: 12,
             ),
             border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(11),
+              borderRadius: BorderRadius.circular(10),
               borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
             ),
             enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(11),
+              borderRadius: BorderRadius.circular(10),
               borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
             ),
             focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(11),
-              borderSide: const BorderSide(color: AppColors.accent, width: 1.6),
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: AppColors.accent, width: 1.5),
             ),
           ),
         ),
       ],
     );
   }
-
-  Widget _buildTechnicalFooter() {
-    return Wrap(
-      alignment: WrapAlignment.center,
-      spacing: 14,
-      runSpacing: 8,
-      children: [
-        _buildFooterSpecPill(Icons.speed_rounded, 'iOS Metal 60 FPS'),
-        _buildFooterSpecPill(Icons.layers_outlined, 'IFC2x3 & IFC4'),
-        _buildFooterSpecPill(Icons.storage_rounded, 'Local DB • Supabase Ready'),
-      ],
-    );
-  }
-
-  Widget _buildFooterSpecPill(IconData icon, String text) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 13, color: AppColors.accent),
-          const SizedBox(width: 5),
-          Text(
-            text,
-            style: const TextStyle(
-              fontFamily: AppTypography.fontFamily,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: AppColors.textMuted,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
-/// Desenha uma malha técnica de engenharia e treliça metálica espacial em tons
-/// de cinza aço (#334155) e azul ciano técnico (#38BDF8) no cabeçalho da tela de login.
+/// Desenha linhas técnicas sutis de estrutura metálica em aço no cabeçalho.
 class _SteelStructureBlueprintPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final minorGridPaint = Paint()
-      ..color = const Color(0xFF94A3B8).withValues(alpha: 0.07)
+    final gridPaint = Paint()
+      ..color = const Color(0xFF94A3B8).withValues(alpha: 0.06)
       ..strokeWidth = 1.0;
 
-    final majorGridPaint = Paint()
-      ..color = const Color(0xFF38BDF8).withValues(alpha: 0.13)
-      ..strokeWidth = 1.0;
-
-    const step = 28.0;
+    const step = 32.0;
     for (double x = 0; x < size.width; x += step) {
-      final isMajor = (x / step).round() % 4 == 0;
-      canvas.drawLine(
-        Offset(x, 0),
-        Offset(x, size.height),
-        isMajor ? majorGridPaint : minorGridPaint,
-      );
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
     }
     for (double y = 0; y < size.height; y += step) {
-      final isMajor = (y / step).round() % 4 == 0;
-      canvas.drawLine(
-        Offset(0, y),
-        Offset(size.width, y),
-        isMajor ? majorGridPaint : minorGridPaint,
-      );
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    // Desenho de treliça espacial de aço (Steel Truss) no canto superior direito
-    final beamPaint = Paint()
-      ..color = const Color(0xFF38BDF8).withValues(alpha: 0.22)
-      ..strokeWidth = 1.8
+    final trussPaint = Paint()
+      ..color = const Color(0xFF38BDF8).withValues(alpha: 0.14)
+      ..strokeWidth = 1.4
       ..style = PaintingStyle.stroke;
 
-    final bracingPaint = Paint()
-      ..color = const Color(0xFF94A3B8).withValues(alpha: 0.18)
-      ..strokeWidth = 1.1
-      ..style = PaintingStyle.stroke;
-
-    final nodePaint = Paint()
-      ..color = const Color(0xFF38BDF8).withValues(alpha: 0.45)
-      ..style = PaintingStyle.fill;
-
-    final startX = size.width * 0.45;
-    final endX = size.width + 20;
-    const topY = 28.0;
-    const bottomY = 108.0;
-    const bays = 5;
+    final startX = size.width * 0.52;
+    final endX = size.width + 16;
+    const topY = 24.0;
+    const bottomY = 92.0;
+    const bays = 4;
     final bayWidth = (endX - startX) / bays;
 
-    // Banzos superior e inferior da treliça metálica
-    canvas.drawLine(Offset(startX, topY), Offset(endX, topY), beamPaint);
-    canvas.drawLine(Offset(startX, bottomY), Offset(endX, bottomY), beamPaint);
+    canvas.drawLine(Offset(startX, topY), Offset(endX, topY), trussPaint);
+    canvas.drawLine(Offset(startX, bottomY), Offset(endX, bottomY), trussPaint);
 
-    // Montantes e diagonais (treliça Pratt/Warren de aço)
     for (int i = 0; i <= bays; i++) {
       final x = startX + i * bayWidth;
-      canvas.drawLine(Offset(x, topY), Offset(x, bottomY), beamPaint);
-      canvas.drawCircle(Offset(x, topY), 3.0, nodePaint);
-      canvas.drawCircle(Offset(x, bottomY), 3.0, nodePaint);
-
+      canvas.drawLine(Offset(x, topY), Offset(x, bottomY), trussPaint);
       if (i < bays) {
         final nextX = startX + (i + 1) * bayWidth;
-        canvas.drawLine(Offset(x, topY), Offset(nextX, bottomY), bracingPaint);
-        canvas.drawLine(Offset(x, bottomY), Offset(nextX, topY), bracingPaint);
+        canvas.drawLine(Offset(x, topY), Offset(nextX, bottomY), trussPaint);
       }
     }
   }

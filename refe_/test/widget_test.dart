@@ -1180,9 +1180,9 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Verifica tela de Login com estética de Engenharia & Aço
-        expect(find.text('Acesso ao Ambiente de Engenharia'), findsOneWidget);
-        expect(find.text('ENGENHARIA ESTRUTURAL & AÇO • OPENBIM 3D'), findsOneWidget);
+        // Verifica tela de Login clean com estética de Engenharia & Aço
+        expect(find.text('Visualizador BIM'), findsOneWidget);
+        expect(find.text('Engenharia Estrutural & Modelos 3D'), findsOneWidget);
 
         // Preenche login pedro e senha 1234
         await tester.enterText(find.byKey(const ValueKey('login_username_field')), 'pedro');
@@ -1197,20 +1197,20 @@ void main() {
         expect(authController.isAuthenticated, isTrue);
         expect(authController.showOnboardingTour, isTrue);
         expect(find.text('ajustado.ifc'), findsOneWidget);
-        expect(find.text('PASSO 1 DE 4 • BEM-VINDO AO AMBIENTE 3D'), findsOneWidget);
+        expect(find.text('PASSO 1 DE 4'), findsOneWidget);
 
         // Avança pelos 4 passos do Tour Interativo
         await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
         await tester.pumpAndSettle();
-        expect(find.text('PASSO 2 DE 4 • INSPEÇÃO E VISÃO DINÂMICA'), findsOneWidget);
+        expect(find.text('PASSO 2 DE 4'), findsOneWidget);
 
         await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
         await tester.pumpAndSettle();
-        expect(find.text('PASSO 3 DE 4 • COMO ADICIONAR NOVOS ARQUIVOS'), findsOneWidget);
+        expect(find.text('PASSO 3 DE 4'), findsOneWidget);
 
         await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
         await tester.pumpAndSettle();
-        expect(find.text('PASSO 4 DE 4 • PARÂMETROS DE EXPORTAÇÃO IFC'), findsOneWidget);
+        expect(find.text('PASSO 4 DE 4'), findsOneWidget);
 
         // Conclui o Tour
         await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));

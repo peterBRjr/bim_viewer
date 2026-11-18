@@ -5,8 +5,7 @@ import 'package:flutter/services.dart';
 import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_typography.dart';
 
-/// Overlay de Guia Interativo (Onboarding / Spotlight Tour) com estética futurista
-/// em Glassmorphism, foco visual direcionado por contraste de cor e navegação leve em 4 passos.
+/// Overlay de Guia Interativo (Onboarding) minimalista e clean em 4 passos curtos.
 class InteractiveOnboardingOverlay extends StatelessWidget {
   final int currentStep;
   final VoidCallback onNext;
@@ -26,44 +25,40 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
   static const List<_OnboardingStepData> _steps = [
     _OnboardingStepData(
       stepNumber: 1,
-      badge: 'PASSO 1 DE 4 • BEM-VINDO AO AMBIENTE 3D',
-      title: 'Engenharia Digital 3D no seu iPhone',
+      badge: 'PASSO 1 DE 4',
+      title: 'Visualizador BIM 3D',
       description:
-          'Explore maquetes estruturais e arquitetônicas openBIM (.IFC, .GLB e .GLTF) em 60 FPS com iluminação técnica, corte em tempo real e operação 100% offline para o canteiro de obras.',
-      highlightTag: 'Projeto Base • ajustado.ifc pronto na tela inicial',
+          'Explore seus projetos estruturais e arquitetônicos em 3D com alta fluidez e operação offline.',
       icon: Icons.view_in_ar_rounded,
       accentColor: Color(0xFF38BDF8),
       spotlightPosition: _SpotlightTarget.centerHero,
     ),
     _OnboardingStepData(
       stepNumber: 2,
-      badge: 'PASSO 2 DE 4 • INSPEÇÃO E VISÃO DINÂMICA',
-      title: 'Abra o Projeto Base (ajustado.ifc)',
+      badge: 'PASSO 2 DE 4',
+      title: 'Projeto Base (ajustado.ifc)',
       description:
-          'Toque no card do projeto para entrar no 3D. Ao selecionar qualquer parede, viga, pilar ou esquadria, ative a Visão Dinâmica para enquadramento automático sem obstruções e cota 3D até o vizinho mais próximo (≤ 6m).',
-      highlightTag: 'Dica: Gire com 1 dedo, dê zoom em pinça e corte pavimentos',
+          'Toque no card para abrir o modelo 3D. Na Visão Dinâmica, você enquadra qualquer peça com cota automática de proximidade.',
       icon: Icons.center_focus_strong_rounded,
       accentColor: Color(0xFF2563EB),
       spotlightPosition: _SpotlightTarget.projectCard,
     ),
     _OnboardingStepData(
       stepNumber: 3,
-      badge: 'PASSO 3 DE 4 • COMO ADICIONAR NOVOS ARQUIVOS',
-      title: 'Importe Seus Próprios Modelos BIM',
+      badge: 'PASSO 3 DE 4',
+      title: 'Adicionar Novo Arquivo',
       description:
-          'Toque no botão azul "Adicionar Projeto" (no canto inferior direito ou no topo) para selecionar qualquer arquivo .IFC ou .GLB salvo no app Arquivos (Files), iCloud Drive, E-mail ou WhatsApp.',
-      highlightTag: 'Cópia segura local: seus projetos ficam salvos offline',
+          'Use o botão "Adicionar Projeto" para importar arquivos .IFC ou .GLB salvos no seu dispositivo.',
       icon: Icons.add_circle_outline_rounded,
       accentColor: Color(0xFF10B981),
       spotlightPosition: _SpotlightTarget.fabBottomRight,
     ),
     _OnboardingStepData(
       stepNumber: 4,
-      badge: 'PASSO 4 DE 4 • PARÂMETROS DE EXPORTAÇÃO IFC',
-      title: 'Guia de Exportação (Básico • Médio • Detalhado)',
+      badge: 'PASSO 4 DE 4',
+      title: 'Guia de Exportação IFC',
       description:
-          'Antes de exportar do Revit, Tekla, Archicad ou Eberick, consulte nossa página "Guia IFC" no topo da tela para configurar os parâmetros exatos de cada nível sem sobrecarregar o hardware.',
-      highlightTag: 'Configure tesselação, MVD e filtros para máxima fluidez no iOS',
+          'Consulte o Guia IFC para configurar sua exportação nos níveis Básico, Médio ou Detalhado.',
       icon: Icons.tune_rounded,
       accentColor: Color(0xFF38BDF8),
       spotlightPosition: _SpotlightTarget.topRightAction,
@@ -80,42 +75,41 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
       color: Colors.transparent,
       child: Stack(
         children: [
-          // 1. Backdrop Translúcido com Desfoque Suave (Direcionamento de Visão)
+          // 1. Backdrop Translúcido Clean
           Positioned.fill(
             child: ClipRect(
               child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 7, sigmaY: 7),
+                filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
                 child: Container(
-                  color: const Color(0xFF0F172A).withValues(alpha: 0.78),
+                  color: const Color(0xFF0F172A).withValues(alpha: 0.72),
                 ),
               ),
             ),
           ),
 
-          // 2. Indicador Luminoso Direcional (Truque de Visão / Spotlight Visual)
+          // 2. Indicador Direcional Discreto
           _buildDirectionalSpotlightIndicator(context, step),
 
-          // 3. Card Central / Contextual do Guia Interativo
+          // 3. Card Minimalista do Passo Atual
           SafeArea(
             child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 440),
+                  constraints: const BoxConstraints(maxWidth: 380),
                   child: Container(
                     padding: const EdgeInsets.all(22),
                     decoration: BoxDecoration(
                       color: const Color(0xFF0F172A),
-                      borderRadius: BorderRadius.circular(22),
+                      borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: step.accentColor.withValues(alpha: 0.55),
-                        width: 1.5,
+                        color: Colors.white.withValues(alpha: 0.14),
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: step.accentColor.withValues(alpha: 0.22),
-                          blurRadius: 32,
-                          offset: const Offset(0, 12),
+                          color: Colors.black.withValues(alpha: 0.30),
+                          blurRadius: 24,
+                          offset: const Offset(0, 10),
                         ),
                       ],
                     ),
@@ -123,35 +117,18 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Barra Superior: Badge + Botão Pular
+                        // Topo: Passo + Pular
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Flexible(
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
-                                  vertical: 5,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: step.accentColor.withValues(alpha: 0.16),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: step.accentColor.withValues(alpha: 0.40),
-                                  ),
-                                ),
-                                child: Text(
-                                  step.badge,
-                                  style: TextStyle(
-                                    fontFamily: AppTypography.fontFamily,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w800,
-                                    color: step.accentColor,
-                                    letterSpacing: 0.5,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
+                            Text(
+                              step.badge,
+                              style: TextStyle(
+                                fontFamily: AppTypography.fontFamily,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w800,
+                                color: step.accentColor,
+                                letterSpacing: 0.6,
                               ),
                             ),
                             TextButton(
@@ -163,14 +140,14 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                               style: TextButton.styleFrom(
                                 foregroundColor: const Color(0xFF94A3B8),
                                 padding: const EdgeInsets.symmetric(
-                                  horizontal: 10,
+                                  horizontal: 8,
                                   vertical: 4,
                                 ),
                                 minimumSize: Size.zero,
                                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                               ),
                               child: const Text(
-                                'Pular Tour',
+                                'Pular',
                                 style: TextStyle(
                                   fontFamily: AppTypography.fontFamily,
                                   fontSize: 12,
@@ -180,116 +157,77 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 18),
+                        const SizedBox(height: 14),
 
-                        // Ícone + Título Principal
+                        // Ícone + Título
                         Row(
                           children: [
                             Container(
-                              width: 48,
-                              height: 48,
+                              width: 40,
+                              height: 40,
                               decoration: BoxDecoration(
-                                color: step.accentColor.withValues(alpha: 0.16),
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                  color: step.accentColor.withValues(alpha: 0.45),
-                                ),
+                                color: step.accentColor.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(11),
                               ),
                               child: Icon(
                                 step.icon,
-                                size: 25,
+                                size: 21,
                                 color: step.accentColor,
                               ),
                             ),
-                            const SizedBox(width: 14),
+                            const SizedBox(width: 12),
                             Expanded(
                               child: Text(
                                 step.title,
                                 style: const TextStyle(
                                   fontFamily: AppTypography.fontFamily,
-                                  fontSize: 19,
+                                  fontSize: 17.5,
                                   fontWeight: FontWeight.w800,
                                   color: Colors.white,
-                                  letterSpacing: -0.4,
-                                  height: 1.15,
+                                  letterSpacing: -0.3,
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 14),
+                        const SizedBox(height: 12),
 
-                        // Descrição Clara e Direta
+                        // Texto Simples (1 a 2 frases)
                         Text(
                           step.description,
                           style: const TextStyle(
                             fontFamily: AppTypography.fontFamily,
                             fontSize: 13.5,
-                            fontWeight: FontWeight.w400,
                             color: Color(0xFFCBD5E1),
                             height: 1.45,
                           ),
                         ),
-                        const SizedBox(height: 14),
-
-                        // Callout de Destaque Visual
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF1E293B),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: Colors.white.withValues(alpha: 0.10),
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                Icons.tips_and_updates_rounded,
-                                size: 16,
-                                color: step.accentColor,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  step.highlightTag,
-                                  style: const TextStyle(
-                                    fontFamily: AppTypography.fontFamily,
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w600,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
 
                         if (isLast) ...[
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 14),
                           SizedBox(
                             width: double.infinity,
-                            child: OutlinedButton.icon(
-                              key: const ValueKey('onboarding_open_export_guide_button'),
+                            child: OutlinedButton(
+                              key: const ValueKey(
+                                'onboarding_open_export_guide_button',
+                              ),
                               onPressed: () {
                                 HapticFeedback.lightImpact();
                                 onOpenExportGuide();
                               },
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: const Color(0xFF38BDF8),
-                                side: const BorderSide(color: Color(0xFF38BDF8)),
-                                padding: const EdgeInsets.symmetric(vertical: 11),
+                                side: BorderSide(
+                                  color: const Color(0xFF38BDF8)
+                                      .withValues(alpha: 0.50),
+                                ),
+                                padding: const EdgeInsets.symmetric(vertical: 10),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                               ),
-                              icon: const Icon(Icons.menu_book_rounded, size: 17),
-                              label: const Text(
-                                'Ver Guia de Exportação IFC Agora',
+                              child: const Text(
+                                'Abrir Guia de Exportação IFC',
                                 style: TextStyle(
                                   fontFamily: AppTypography.fontFamily,
                                   fontSize: 12.5,
@@ -302,14 +240,10 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
 
                         const SizedBox(height: 20),
 
-                        // Rodapé: Indicadores de Passo + Botões Voltar / Avançar
-                        Wrap(
-                          alignment: WrapAlignment.spaceBetween,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          spacing: 8,
-                          runSpacing: 10,
+                        // Rodapé: Indicadores + Navegação
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            // Dots de Progresso
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: List.generate(_steps.length, (i) {
@@ -317,18 +251,17 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                                 return AnimatedContainer(
                                   duration: const Duration(milliseconds: 200),
                                   margin: const EdgeInsets.only(right: 6),
-                                  width: active ? 20 : 7,
-                                  height: 7,
+                                  width: active ? 18 : 6,
+                                  height: 6,
                                   decoration: BoxDecoration(
                                     color: active
                                         ? step.accentColor
                                         : const Color(0xFF475569),
-                                    borderRadius: BorderRadius.circular(4),
+                                    borderRadius: BorderRadius.circular(3),
                                   ),
                                 );
                               }),
                             ),
-
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -339,18 +272,18 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                                       onPrevious();
                                     },
                                     style: TextButton.styleFrom(
-                                      foregroundColor: const Color(0xFFCBD5E1),
+                                      foregroundColor: const Color(0xFF94A3B8),
                                       padding: const EdgeInsets.symmetric(
                                         horizontal: 8,
                                         vertical: 6,
                                       ),
                                       minimumSize: Size.zero,
                                     ),
-                                    child: const Text('Anterior'),
+                                    child: const Text('Voltar'),
                                   ),
                                   const SizedBox(width: 6),
                                 ],
-                                ElevatedButton.icon(
+                                ElevatedButton(
                                   key: const ValueKey('onboarding_next_button'),
                                   onPressed: () {
                                     HapticFeedback.lightImpact();
@@ -359,22 +292,17 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: AppColors.accent,
                                     foregroundColor: Colors.white,
+                                    elevation: 0,
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 14,
+                                      horizontal: 16,
                                       vertical: 10,
                                     ),
                                     shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(11),
+                                      borderRadius: BorderRadius.circular(10),
                                     ),
                                   ),
-                                  icon: Icon(
-                                    isLast
-                                        ? Icons.check_circle_outline_rounded
-                                        : Icons.arrow_forward_rounded,
-                                    size: 16,
-                                  ),
-                                  label: Text(
-                                    isLast ? 'Começar' : 'Próximo',
+                                  child: Text(
+                                    isLast ? 'Concluir' : 'Próximo',
                                     style: const TextStyle(
                                       fontFamily: AppTypography.fontFamily,
                                       fontSize: 13,
@@ -409,30 +337,23 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
           right: 16,
           child: IgnorePointer(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
-                color: step.accentColor.withValues(alpha: 0.22),
-                borderRadius: BorderRadius.circular(30),
-                border: Border.all(color: step.accentColor, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: step.accentColor.withValues(alpha: 0.45),
-                    blurRadius: 20,
-                    spreadRadius: 2,
-                  ),
-                ],
+                color: step.accentColor.withValues(alpha: 0.20),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: step.accentColor, width: 1.5),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.add_rounded, color: Colors.white, size: 20),
+                  Icon(Icons.add_rounded, color: Colors.white, size: 18),
                   SizedBox(width: 6),
                   Text(
-                    'Adicionar Projeto (.IFC / .GLB)',
+                    'Adicionar Projeto',
                     style: TextStyle(
                       fontFamily: AppTypography.fontFamily,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
                       color: Colors.white,
                     ),
                   ),
@@ -447,29 +368,23 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
           right: 14,
           child: IgnorePointer(
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
               decoration: BoxDecoration(
-                color: step.accentColor.withValues(alpha: 0.25),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: step.accentColor, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: step.accentColor.withValues(alpha: 0.45),
-                    blurRadius: 18,
-                  ),
-                ],
+                color: step.accentColor.withValues(alpha: 0.20),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: step.accentColor, width: 1.5),
               ),
               child: const Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.tune_rounded, color: Colors.white, size: 16),
-                  SizedBox(width: 6),
+                  Icon(Icons.tune_rounded, color: Colors.white, size: 15),
+                  SizedBox(width: 5),
                   Text(
-                    'Guia IFC no Topo',
+                    'Guia IFC',
                     style: TextStyle(
                       fontFamily: AppTypography.fontFamily,
                       fontSize: 11.5,
-                      fontWeight: FontWeight.w800,
+                      fontWeight: FontWeight.w700,
                       color: Colors.white,
                     ),
                   ),
@@ -497,7 +412,6 @@ class _OnboardingStepData {
   final String badge;
   final String title;
   final String description;
-  final String highlightTag;
   final IconData icon;
   final Color accentColor;
   final _SpotlightTarget spotlightPosition;
@@ -507,7 +421,6 @@ class _OnboardingStepData {
     required this.badge,
     required this.title,
     required this.description,
-    required this.highlightTag,
     required this.icon,
     required this.accentColor,
     required this.spotlightPosition,
