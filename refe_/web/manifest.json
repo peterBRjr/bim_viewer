@@ -1,6 +1,6 @@
 {
-    "name": "refe_",
-    "short_name": "refe_",
+    "name": "BIM Viewer",
+    "short_name": "BIM Viewer",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:refe_/main.dart';
+import 'package:refe_/features/auth/presentation/controllers/auth_controller.dart';
 import 'package:refe_/features/home/domain/models/project_model.dart';
 import 'package:refe_/features/home/data/services/storage_service.dart';
 import 'package:refe_/features/home/presentation/controllers/home_controller.dart';
+import 'package:refe_/features/home/presentation/screens/ifc_export_guide_screen.dart';
 import 'package:refe_/features/home/presentation/widgets/project_card.dart';
 import 'package:refe_/features/home/presentation/widgets/confirm_delete_dialog.dart';
 import 'package:refe_/features/viewer_3d/data/services/viewer_3d_js_bridge.dart';
@@ -1152,6 +1154,93 @@ void main() {
 
         await controller.exitDynamicView();
         await tester.pumpAndSettle();
+      });
+    });
+
+    group('Official Release: Auth (pedro / 1234), Onboarding Tour & IFC Export Guide Tests', () {
+      testWidgets('Login with pedro / 1234 navigates to Home with ajustado.ifc and launches 4-step Onboarding Tour', (WidgetTester tester) async {
+        final ajustadoProject = ProjectModel(
+          id: 'proj-ajustado-001',
+          name: 'ajustado.ifc',
+          filePath: '/local/projects/ajustado.ifc',
+          fileSizeMB: 14.2,
+          format: 'IFC',
+          createdAt: DateTime(2026, 11, 17),
+        );
+        final fakeStorage = FakeStorageService(initial: [ajustadoProject]);
+        final homeController = HomeController(storageService: fakeStorage);
+        final authController = AuthController();
+
+        await tester.pumpWidget(
+          BimViewerApp(
+            homeController: homeController,
+            authController: authController,
+            requireLogin: true,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Verifica tela de Login com estética de Engenharia & Aço
+        expect(find.text('Acesso ao Ambiente de Engenharia'), findsOneWidget);
+        expect(find.text('ENGENHARIA ESTRUTURAL & AÇO • OPENBIM 3D'), findsOneWidget);
+
+        // Preenche login pedro e senha 1234
+        await tester.enterText(find.byKey(const ValueKey('login_username_field')), 'pedro');
+        await tester.enterText(find.byKey(const ValueKey('login_password_field')), '1234');
+        final submitBtn = find.byKey(const ValueKey('login_submit_button'));
+        await tester.ensureVisible(submitBtn);
+        await tester.pumpAndSettle();
+        await tester.tap(submitBtn);
+        await tester.pumpAndSettle();
+
+        // Verifica que autenticou, carregou apenas ajustado.ifc e abriu o Tour Interativo no Passo 1
+        expect(authController.isAuthenticated, isTrue);
+        expect(authController.showOnboardingTour, isTrue);
+        expect(find.text('ajustado.ifc'), findsOneWidget);
+        expect(find.text('PASSO 1 DE 4 • BEM-VINDO AO AMBIENTE 3D'), findsOneWidget);
+
+        // Avança pelos 4 passos do Tour Interativo
+        await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('PASSO 2 DE 4 • INSPEÇÃO E VISÃO DINÂMICA'), findsOneWidget);
+
+        await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('PASSO 3 DE 4 • COMO ADICIONAR NOVOS ARQUIVOS'), findsOneWidget);
+
+        await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('PASSO 4 DE 4 • PARÂMETROS DE EXPORTAÇÃO IFC'), findsOneWidget);
+
+        // Conclui o Tour
+        await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
+        await tester.pumpAndSettle();
+        expect(authController.showOnboardingTour, isFalse);
+      });
+
+      testWidgets('IfcExportGuideScreen toggles and slides across Básico, Médio and Detalhado (iOS) levels', (WidgetTester tester) async {
+        await tester.pumpWidget(
+          const MaterialApp(
+            home: IfcExportGuideScreen(initialLevelIndex: 0),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Nível 1: Básico
+        expect(find.text('Exportação Básica (Máxima Leveza de Hardware)'), findsOneWidget);
+        expect(find.text('5 MB a 25 MB'), findsOneWidget);
+
+        // Alterna para Nível 2: Médio via Toggle Button
+        await tester.tap(find.byKey(const ValueKey('export_toggle_tier_medio')));
+        await tester.pumpAndSettle();
+        expect(find.text('Exportação Média (Diferença Nítida a Olho Nu)'), findsOneWidget);
+        expect(find.text('20 MB a 65 MB'), findsOneWidget);
+
+        // Alterna para Nível 3: Detalhado (iOS) via Toggle Button
+        await tester.tap(find.byKey(const ValueKey('export_toggle_tier_detalhado')));
+        await tester.pumpAndSettle();
+        expect(find.text('Exportação Detalhada (Teto Gráfico iOS / Apple Metal)'), findsOneWidget);
+        expect(find.text('50 MB a 120 MB (Teto Seguro iOS)'), findsOneWidget);
       });
     });
   });
