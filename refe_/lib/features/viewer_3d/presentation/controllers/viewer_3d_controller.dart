@@ -12,11 +12,9 @@ import '../../data/services/viewer_3d_js_bridge.dart';
 import '../../domain/models/bim_element_metadata.dart';
 import '../../domain/models/construction_stage_model.dart';
 import '../../domain/models/measurement_model.dart';
-import '../../domain/models/proximity_dimension_model.dart';
 
 export '../../domain/models/bim_element_metadata.dart';
 export '../../domain/models/construction_stage_model.dart';
-export '../../domain/models/proximity_dimension_model.dart';
 
 /// Controller reativo responsável pelo gerenciamento de estado da UI e
 /// coordenação com a Viewport 3D WebGL através do [Viewer3dJsBridge].
@@ -61,8 +59,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   int? _selectedStoreyFilterId; // null = Todos os Níveis (Projeto Completo)
   bool _highlightSimilarIn3D = false;
   bool _isDynamicXrayActive = false;
-  bool _showProximityDimension = true;
-  ProximityDimensionModel? _proximityDimension;
   bool _hadSimilarHighlightsInJs = false;
   bool _hadXrayInJs = false;
   BimProjectSpecs? _projectSpecs;
@@ -148,8 +144,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   int? get selectedStoreyFilterId => _selectedStoreyFilterId;
   bool get highlightSimilarIn3D => _highlightSimilarIn3D;
   bool get isDynamicXrayActive => _isDynamicXrayActive;
-  bool get showProximityDimension => _showProximityDimension;
-  ProximityDimensionModel? get proximityDimension => _proximityDimension;
   BimProjectSpecs? get projectSpecs => _projectSpecs;
   List<BimStoreyInfo> get availableStoreys => _projectSpecs?.storeys ?? const [];
 
@@ -313,13 +307,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   }
 
   @override
-  void onProximityDimensionCalculated(ProximityDimensionModel proximity) {
-    if (_isDisposed) return;
-    _proximityDimension = proximity;
-    notifyListeners();
-  }
-
-  @override
   void onConstructionStagesLoaded(ConstructionStagesSummary summary) {
     if (_isDisposed) return;
     _stagesSummary = summary;
@@ -448,7 +435,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     _isDynamicViewActive = false;
     _highlightSimilarIn3D = false;
     _isDynamicXrayActive = false;
-    _proximityDimension = null;
     _hadSimilarHighlightsInJs = false;
     _hadXrayInJs = false;
     _selectedStoreyFilterId = null;
@@ -512,13 +498,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     _isDynamicXrayActive = !_isDynamicXrayActive;
     notifyListeners();
     await _syncDynamic3DHighlights();
-  }
-
-  /// Alterna a exibição da linha de cota 3D de proximidade (≤ 6.0m) na Visualização Dinâmica.
-  Future<void> toggleProximityDimension() async {
-    _showProximityDimension = !_showProximityDimension;
-    notifyListeners();
-    await _jsBridge.setProximityDimensionEnabled(_showProximityDimension);
   }
 
   /// Reenquadra a câmera 3D diretamente sobre a peça atual na obra.
@@ -862,7 +841,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   /// Limpa a seleção do elemento atual sincronizando com o JavaScript.
   Future<void> clearSelectedElement() async {
     _selectedElement = null;
-    _proximityDimension = null;
     notifyListeners();
 
     await _jsBridge.clearSelection();

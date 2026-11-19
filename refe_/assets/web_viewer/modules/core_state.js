@@ -77,10 +77,7 @@ const state = {
   similarHighlightedIds: [],
   similarSubsetSignature: '',
   preDynamicViewSnapshot: null,
-  // Cota de Proximidade e Anti-Obstrução da Visualização Dinâmica
-  dynamicProximityGroup: null,
-  showDynamicProximity: true,
-  lastProximityData: null,
+  // Anti-Obstrução da Visualização Dinâmica
   occludedGhostIds: new Set(),
   occludedSavedMaterials: new Map(),
 };

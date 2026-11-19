@@ -91,15 +91,9 @@ function resetBimAnalyticsState() {
   state.similarSubsetSignature = '';
   state.preDynamicViewSnapshot = null;
   clearSimilarHighlights();
-  if (typeof clearProximityDimensionLine === 'function') {
-    clearProximityDimensionLine();
-  }
   if (typeof restoreOccludedGhostMaterials === 'function') {
     restoreOccludedGhostMaterials();
   }
-  state.dynamicProximityGroup = null;
-  state.showDynamicProximity = true;
-  state.lastProximityData = null;
   state.occludedGhostIds.clear();
   state.occludedSavedMaterials.clear();
   if (typeof resetStageFilterState === 'function') {
@@ -1444,338 +1438,10 @@ function getBoxesMinDistanceAndPoints(boxA, boxB) {
 }
 
 /**
- * Cria a textura dinâmica 2D renderizada em Canvas para o Badge de cota de proximidade da Visão Dinâmica
+ * Funções de compatibilidade (recurso de cota de proximidade desativado)
  */
-function createProximitySprite(text) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 540;
-  canvas.height = 130;
-  const ctx = canvas.getContext('2d');
-
-  const r = 24;
-  const w = 528;
-  const h = 118;
-  const x = 6;
-  const y = 6;
-
-  // Fundo cápsula Dark Slate (#0F172A) com borda Sky Blue (#38BDF8)
-  ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
-  ctx.strokeStyle = '#38BDF8';
-  ctx.lineWidth = 5;
-
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  ctx.lineTo(x + r, y + h);
-  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
-  ctx.lineTo(x, y + r);
-  ctx.quadraticCurveTo(x, y, x + r, y);
-  ctx.closePath();
-  ctx.fill();
-  ctx.stroke();
-
-  // Texto legível de alta resolução
-  ctx.fillStyle = '#FFFFFF';
-  ctx.font = 'bold 36px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, w / 2 + x, h / 2 + y);
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.minFilter = THREE.LinearFilter;
-  const spriteMat = new THREE.SpriteMaterial({
-    map: texture,
-    depthTest: false,
-    transparent: true,
-  });
-  const sprite = new THREE.Sprite(spriteMat);
-  sprite.scale.set(1.45, 0.35, 1.0);
-  return sprite;
-}
-
-/**
- * Descarta recursos de GPU (geometria, texturas e materiais) do grupo de cota de proximidade
- */
-function clearProximityDimensionGroupOnly() {
-  if (!state.dynamicProximityGroup) return;
-  while (state.dynamicProximityGroup.children.length > 0) {
-    const child = state.dynamicProximityGroup.children[0];
-    state.dynamicProximityGroup.remove(child);
-    if (child.traverse) {
-      child.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) {
-            obj.material.forEach((m) => {
-              if (m.map) m.map.dispose();
-              m.dispose();
-            });
-          } else {
-            if (obj.material.map) obj.material.map.dispose();
-            obj.material.dispose();
-          }
-        }
-      });
-    }
-  }
-}
-
-/**
- * Remove a cota tridimensional de proximidade do 3D e reseta o cache
- */
-function clearProximityDimensionLine() {
-  clearProximityDimensionGroupOnly();
-  state.lastProximityData = null;
-  if (typeof requestRender === 'function') requestRender(2);
-}
-
-/**
- * Localiza o elemento vizinho mais próximo logicamente relevante num raio máximo de 6.0 metros
- * (restringindo estritamente aos elementos do mesmo nível/pavimento para máxima fluidez).
- */
-function findNearestLogicalNeighbor(targetId, maxRadius = 6.0) {
-  const id = Number(targetId);
-  if (isNaN(id) || !state.currentModel) return null;
-
-  const targetBox = getElementWorldBox(id);
-  if (targetBox.isEmpty()) return null;
-
-  const targetAgg = state.parentToChildren.get(id) || state.childToParent.get(id);
-  const excludedIds = new Set([id]);
-  if (targetAgg) {
-    excludedIds.add(targetAgg.parentId);
-    if (Array.isArray(targetAgg.children)) {
-      for (const cid of targetAgg.children) excludedIds.add(cid);
-    }
-  }
-
-  const targetCat = (state.elementCategoryMap.get(id) || '').toUpperCase();
-  const targetMeta = state.elementMetaIndex.get(id);
-  const targetSig = (targetMeta?.sig || '').toLowerCase();
-
-  const isFixture = targetCat.includes('FLOWTERMINAL') || targetCat.includes('FURNISHING') ||
-    /patente|vaso|sanit|toilet|bacia|bide|lavat|pia|chuveiro/.test(targetSig);
-  const isOpening = targetCat.includes('WINDOW') || targetCat.includes('DOOR');
-
-  // Restringe a busca aos elementos do mesmo pavimento (reduz de milhares para poucas dezenas)
-  const storeyId = state.elementToStorey.get(id);
-  let candidateIds = null;
-  if (storeyId !== undefined && state.storeyToElements.has(storeyId)) {
-    candidateIds = state.storeyToElements.get(storeyId);
-  } else {
-    candidateIds = Array.from(state.elementBounds.keys());
-  }
-
-  const searchBox = targetBox.clone().expandByScalar(maxRadius);
-  let bestPriority = null;
-  let bestOverall = null;
-
-  for (const cid of candidateIds) {
-    if (excludedIds.has(cid)) continue;
-
-    const candBox = getElementWorldBox(cid);
-    if (candBox.isEmpty()) continue;
-    if (!searchBox.intersectsBox(candBox)) continue;
-
-    const { distance, pointA, pointB } = getBoxesMinDistanceAndPoints(targetBox, candBox);
-    if (distance > maxRadius) continue;
-
-    const candCat = (state.elementCategoryMap.get(cid) || '').toUpperCase();
-    const candMeta = state.elementMetaIndex.get(cid);
-    const candSig = (candMeta?.sig || '').toLowerCase();
-
-    // Prioridade lógica:
-    // - Para louças/patentes: Parede ou divisória de fundo
-    // - Para janelas/portas: Paredes de apoio ou pilares
-    // - Para paredes: Outras paredes, pilares ou lajes
-    let isPriority = false;
-    if (isFixture) {
-      isPriority = (candCat.includes('WALL') || /parede|divis|alvenaria|drywall|gesso/.test(candSig)) &&
-        !candCat.includes('SLAB');
-    } else if (isOpening) {
-      isPriority = candCat.includes('WALL') || candCat.includes('COLUMN');
-    } else {
-      isPriority = candCat.includes('WALL') || candCat.includes('COLUMN') || candCat.includes('SLAB');
-    }
-
-    const typeLabel = getFriendlyBimCategoryName(candCat);
-    const friendlyName = candMeta?.name
-      ? decodeIfcStepText(candMeta.name)
-      : `${typeLabel} #${cid}`;
-
-    const candRecord = {
-      targetExpressId: id,
-      neighborExpressId: cid,
-      neighborType: typeLabel,
-      neighborName: friendlyName,
-      distanceMeters: Number(distance.toFixed(3)),
-      formattedDistance: `${distance.toFixed(2).replace('.', ',')} m`,
-      pointTarget: pointA,
-      pointNeighbor: pointB,
-      hasNeighbor: true,
-    };
-
-    if (isPriority) {
-      if (!bestPriority || distance < bestPriority.distanceMeters) {
-        bestPriority = candRecord;
-      }
-    }
-    if (!bestOverall || distance < bestOverall.distanceMeters) {
-      bestOverall = candRecord;
-    }
-  }
-
-  const chosen = bestPriority || bestOverall;
-  if (chosen) {
-    return chosen;
-  }
-
-  return {
-    targetExpressId: id,
-    neighborExpressId: null,
-    neighborType: null,
-    neighborName: null,
-    distanceMeters: null,
-    formattedDistance: 'Sem elementos a menos de 6 m',
-    hasNeighbor: false,
-  };
-}
-
-/**
- * Renderiza a linha de cota BIM 3D contínua (#38BDF8 Sky Blue) com traços perpendiculares
- * de terminação e badge flutuante em metros conectado ao ponto mais próximo.
- */
-function renderProximityDimensionLine(proxData) {
-  if (!state.scene) return;
-
-  if (!state.dynamicProximityGroup) {
-    state.dynamicProximityGroup = new THREE.Group();
-    state.dynamicProximityGroup.name = 'DynamicProximityGroup';
-    state.scene.add(state.dynamicProximityGroup);
-  }
-
-  clearProximityDimensionGroupOnly();
-
-  if (!state.showDynamicProximity || !proxData || !proxData.hasNeighbor || !proxData.pointTarget || !proxData.pointNeighbor) {
-    if (typeof requestRender === 'function') requestRender(2);
-    if (proxData) {
-      notifyFlutter('onProximityDimensionCalculated', {
-        targetExpressId: proxData.targetExpressId,
-        neighborExpressId: null,
-        neighborType: null,
-        neighborName: null,
-        distanceMeters: null,
-        formattedDistance: 'Sem elementos a menos de 6 m',
-        hasNeighbor: false,
-      });
-    }
-    return;
-  }
-
-  const P0 = proxData.pointTarget;
-  const P1 = proxData.pointNeighbor;
-  const dist = proxData.distanceMeters;
-  const colorHex = 0x38BDF8;
-
-  const group = new THREE.Group();
-  group.name = 'ProximityActiveVisual';
-
-  // 1. Esferas de ancoragem nos pontos inicial e final
-  const sphereGeom = new THREE.SphereGeometry(0.038, 16, 16);
-  const sphereMat = new THREE.MeshBasicMaterial({ color: colorHex, depthTest: false });
-
-  const s0 = new THREE.Mesh(sphereGeom, sphereMat);
-  s0.position.copy(P0);
-  s0.renderOrder = 10;
-  group.add(s0);
-
-  const s1 = new THREE.Mesh(sphereGeom, sphereMat);
-  s1.position.copy(P1);
-  s1.renderOrder = 10;
-  group.add(s1);
-
-  // 2. Linha contínua técnica de cota
-  const lineGeom = new THREE.BufferGeometry().setFromPoints([P0, P1]);
-  const lineMat = new THREE.LineBasicMaterial({
-    color: colorHex,
-    linewidth: 3,
-    depthTest: false,
-    transparent: true,
-    opacity: 0.95,
-  });
-  const line = new THREE.Line(lineGeom, lineMat);
-  line.renderOrder = 10;
-  group.add(line);
-
-  // 3. Ticks perpendiculares nas extremidades
-  const dir = P1.clone().sub(P0);
-  const len = dir.length();
-  if (len > 0.01) {
-    dir.normalize();
-    const up = Math.abs(dir.y) > 0.85 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    const perp = new THREE.Vector3().crossVectors(dir, up).normalize().multiplyScalar(0.09);
-
-    const tick0Geom = new THREE.BufferGeometry().setFromPoints([
-      P0.clone().sub(perp),
-      P0.clone().add(perp),
-    ]);
-    const tick1Geom = new THREE.BufferGeometry().setFromPoints([
-      P1.clone().sub(perp),
-      P1.clone().add(perp),
-    ]);
-    const tickMat = new THREE.LineBasicMaterial({ color: colorHex, linewidth: 2, depthTest: false });
-    const tick0 = new THREE.Line(tick0Geom, tickMat);
-    const tick1 = new THREE.Line(tick1Geom, tickMat);
-    tick0.renderOrder = 10;
-    tick1.renderOrder = 10;
-    group.add(tick0);
-    group.add(tick1);
-  }
-
-  // 4. Badge numérico flutuante (Billboard Sprite)
-  const midPoint = P0.clone().add(P1).multiplyScalar(0.5);
-  midPoint.y += 0.10;
-  const labelText = `↔ ${dist.toFixed(2).replace('.', ',')} m • ${proxData.neighborName}`;
-  const sprite = createProximitySprite(labelText);
-  sprite.position.copy(midPoint);
-  sprite.renderOrder = 11;
-  group.add(sprite);
-
-  state.dynamicProximityGroup.add(group);
-  if (typeof requestRender === 'function') requestRender(3);
-
-  // Notifica o Flutter para atualizar o painel de especificações
-  notifyFlutter('onProximityDimensionCalculated', {
-    targetExpressId: proxData.targetExpressId,
-    neighborExpressId: proxData.neighborExpressId,
-    neighborType: proxData.neighborType,
-    neighborName: proxData.neighborName,
-    distanceMeters: proxData.distanceMeters,
-    formattedDistance: proxData.formattedDistance,
-    hasNeighbor: true,
-  });
-}
-
-/**
- * Ativa ou desativa a exibição da cota 3D de proximidade na viewport
- */
-function setProximityDimensionEnabled(enabled) {
-  state.showDynamicProximity = Boolean(enabled);
-  if (!state.showDynamicProximity) {
-    clearProximityDimensionGroupOnly();
-  } else {
-    const id = state.selectedObject?.expressID;
-    if (id !== undefined && !isNaN(id)) {
-      const proximityData = findNearestLogicalNeighbor(id, 6.0);
-      state.lastProximityData = proximityData;
-      renderProximityDimensionLine(proximityData);
-    }
-  }
-  if (typeof requestRender === 'function') requestRender(2);
-}
+function clearProximityDimensionLine() {}
+function setProximityDimensionEnabled(enabled) {}
 
 /**
  * Testa se há obstruções (elementos intervenientes) entre a posição da câmera e o centro do elemento
@@ -1957,19 +1623,8 @@ function computeOptimalCameraPose(expressID, aspect, limitingFov) {
     distMargin = 1.45;
     minDist = 2.2;
   } else if (isFixture) {
-    // Louças / Patentes: Visão frontal limpa elevada (26º) orientada para fora da parede de fundo
-    const nearest = findNearestLogicalNeighbor(id, 6.0);
-    let frontDir = null;
-    if (nearest && nearest.hasNeighbor && nearest.pointNeighbor) {
-      frontDir = new THREE.Vector3(
-        elemCenter.x - nearest.pointNeighbor.x,
-        0,
-        elemCenter.z - nearest.pointNeighbor.z
-      );
-    }
-    if (!frontDir || frontDir.lengthSq() < 0.01) {
-      frontDir = new THREE.Vector3(elemCenter.x - modelCenter.x, 0, elemCenter.z - modelCenter.z);
-    }
+    // Louças / Sanitários: Visão frontal limpa elevada (26º) orientada para fora do centro da obra
+    let frontDir = new THREE.Vector3(elemCenter.x - modelCenter.x, 0, elemCenter.z - modelCenter.z);
     if (frontDir.lengthSq() < 0.01) {
       frontDir.set(0.707, 0, 0.707);
     } else {
@@ -2059,11 +1714,6 @@ function focusElementForDynamicView(expressID, durationMs = 460) {
 
   // Resolve qualquer elemento que obstrua a linha de visada
   resolveSightlineOcclusions(pose.targetCenter, pose.cameraPos, id);
-
-  // Calcula e desenha a cota de proximidade em 3D (raio <= 6m)
-  const proximityData = findNearestLogicalNeighbor(id, 6.0);
-  state.lastProximityData = proximityData;
-  renderProximityDimensionLine(proximityData);
 
   // Anima a câmera para a posição ideal
   state.isElementPivotActive = true;
@@ -2500,11 +2150,8 @@ window.BimEngine.selectElementByExpressId = selectElementByExpressId;
 window.BimEngine.highlightSimilarElements = highlightSimilarElements;
 window.BimEngine.clearSimilarHighlights = clearSimilarHighlights;
 window.BimEngine.setDynamicXrayContext = setDynamicXrayContext;
-window.BimEngine.createProximitySprite = createProximitySprite;
 window.BimEngine.clearProximityDimensionLine = clearProximityDimensionLine;
 window.BimEngine.setProximityDimensionEnabled = setProximityDimensionEnabled;
-window.BimEngine.findNearestLogicalNeighbor = findNearestLogicalNeighbor;
-window.BimEngine.renderProximityDimensionLine = renderProximityDimensionLine;
 window.BimEngine.restoreOccludedGhostMaterials = restoreOccludedGhostMaterials;
 window.BimEngine.resolveSightlineOcclusions = resolveSightlineOcclusions;
 window.BimEngine.computeOptimalCameraPose = computeOptimalCameraPose;
@@ -2526,11 +2173,8 @@ window.selectElementByExpressId = selectElementByExpressId;
 window.highlightSimilarElements = highlightSimilarElements;
 window.clearSimilarHighlights = clearSimilarHighlights;
 window.setDynamicXrayContext = setDynamicXrayContext;
-window.createProximitySprite = createProximitySprite;
 window.clearProximityDimensionLine = clearProximityDimensionLine;
 window.setProximityDimensionEnabled = setProximityDimensionEnabled;
-window.findNearestLogicalNeighbor = findNearestLogicalNeighbor;
-window.renderProximityDimensionLine = renderProximityDimensionLine;
 window.restoreOccludedGhostMaterials = restoreOccludedGhostMaterials;
 window.resolveSightlineOcclusions = resolveSightlineOcclusions;
 window.computeOptimalCameraPose = computeOptimalCameraPose;

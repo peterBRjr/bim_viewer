@@ -59,10 +59,10 @@ class StorageService {
         }
       }
 
-      // Limpa entradas e arquivos de demonstração obsoletos (Projeto1 / randon) se existirem
+      // Limpa entradas e arquivos de demonstração obsoletos (Projeto1) se existirem
       bool isObsoleteDemo(ProjectModel p) {
         final lower = p.name.toLowerCase();
-        return lower.contains('projeto1') || lower.contains('randon');
+        return lower.contains('projeto1');
       }
 
       final hadOldProjects = projects.any(isObsoleteDemo);
@@ -78,10 +78,11 @@ class StorageService {
         projects.removeWhere(isObsoleteDemo);
       }
 
-      // Semeia apenas o modelo base ajustado.ifc dos assets caso não esteja no catálogo
+      // Semeia os modelos base (ajustado.ifc e randon.ifc) dos assets caso não estejam no catálogo
       bool catalogUpdated = hadOldProjects;
       const defaultAssets = <Map<String, String>>[
         {'assetPath': 'assets/models/ajustado.ifc', 'name': 'ajustado.ifc', 'key': 'ajustado'},
+        {'assetPath': 'assets/models/randon.ifc', 'name': 'randon.ifc', 'key': 'randon'},
       ];
 
       for (final assetInfo in defaultAssets) {
