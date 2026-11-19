@@ -245,17 +245,6 @@ class _HomeScreenState extends State<HomeScreen> {
                         ? null
                         : () => _controller.loadProjects(),
                   ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    tooltip: 'Importar Modelo BIM',
-                    icon: const Icon(
-                      Icons.add_circle_outline_rounded,
-                      color: AppColors.surface,
-                    ),
-                    onPressed: _controller.isLoading
-                        ? null
-                        : _handleImportProject,
-                  ),
                   if (widget.authController != null)
                     IconButton(
                       key: const ValueKey('logout_button'),
