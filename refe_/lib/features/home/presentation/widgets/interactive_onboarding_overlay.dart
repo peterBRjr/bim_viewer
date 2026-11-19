@@ -6,12 +6,14 @@ import '../../../../core/constants/app_colors.dart';
 import '../../../../core/constants/app_typography.dart';
 
 /// Overlay de Guia Interativo (Onboarding) minimalista e clean em 4 passos curtos.
-class InteractiveOnboardingOverlay extends StatelessWidget {
+class InteractiveOnboardingOverlay extends StatefulWidget {
   final int currentStep;
   final VoidCallback onNext;
   final VoidCallback onPrevious;
   final VoidCallback onSkip;
   final VoidCallback onOpenExportGuide;
+  final bool initialDontShowAgain;
+  final ValueChanged<bool>? onDontShowAgainChanged;
 
   const InteractiveOnboardingOverlay({
     super.key,
@@ -20,7 +22,41 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
     required this.onPrevious,
     required this.onSkip,
     required this.onOpenExportGuide,
+    this.initialDontShowAgain = true,
+    this.onDontShowAgainChanged,
   });
+
+  @override
+  State<InteractiveOnboardingOverlay> createState() =>
+      _InteractiveOnboardingOverlayState();
+}
+
+class _InteractiveOnboardingOverlayState
+    extends State<InteractiveOnboardingOverlay> {
+  late bool _dontShowAgain;
+
+  @override
+  void initState() {
+    super.initState();
+    _dontShowAgain = widget.initialDontShowAgain;
+  }
+
+  @override
+  void didUpdateWidget(covariant InteractiveOnboardingOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialDontShowAgain != widget.initialDontShowAgain) {
+      _dontShowAgain = widget.initialDontShowAgain;
+    }
+  }
+
+  void _onToggleDontShowAgain(bool? value) {
+    final newValue = value ?? !_dontShowAgain;
+    HapticFeedback.selectionClick();
+    setState(() {
+      _dontShowAgain = newValue;
+    });
+    widget.onDontShowAgainChanged?.call(newValue);
+  }
 
   static const List<_OnboardingStepData> _steps = [
     _OnboardingStepData(
@@ -67,7 +103,7 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final safeIndex = currentStep.clamp(0, _steps.length - 1);
+    final safeIndex = widget.currentStep.clamp(0, _steps.length - 1);
     final step = _steps[safeIndex];
     final isLast = safeIndex == _steps.length - 1;
 
@@ -135,7 +171,7 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                               key: const ValueKey('onboarding_skip_button'),
                               onPressed: () {
                                 HapticFeedback.selectionClick();
-                                onSkip();
+                                widget.onSkip();
                               },
                               style: TextButton.styleFrom(
                                 foregroundColor: const Color(0xFF94A3B8),
@@ -213,7 +249,7 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                               ),
                               onPressed: () {
                                 HapticFeedback.lightImpact();
-                                onOpenExportGuide();
+                                widget.onOpenExportGuide();
                               },
                               style: OutlinedButton.styleFrom(
                                 foregroundColor: const Color(0xFF38BDF8),
@@ -238,7 +274,64 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                           ),
                         ],
 
-                        const SizedBox(height: 20),
+                        const SizedBox(height: 14),
+
+                        // Checkbox Clean: Não mostrar ao entrar no app
+                        InkWell(
+                          key: const ValueKey('onboarding_dont_show_again_row'),
+                          onTap: () => _onToggleDontShowAgain(!_dontShowAgain),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(
+                              vertical: 4,
+                              horizontal: 2,
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: Checkbox(
+                                    key: const ValueKey(
+                                      'onboarding_dont_show_again_checkbox',
+                                    ),
+                                    value: _dontShowAgain,
+                                    activeColor: AppColors.accent,
+                                    checkColor: Colors.white,
+                                    side: const BorderSide(
+                                      color: Color(0xFF64748B),
+                                      width: 1.5,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    materialTapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    visualDensity: VisualDensity.compact,
+                                    onChanged: _onToggleDontShowAgain,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Flexible(
+                                  child: Text(
+                                    'Não mostrar ao entrar no app',
+                                    style: TextStyle(
+                                      fontFamily: AppTypography.fontFamily,
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w500,
+                                      color: _dontShowAgain
+                                          ? const Color(0xFFE2E8F0)
+                                          : const Color(0xFF94A3B8),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 14),
 
                         // Rodapé: Indicadores + Navegação
                         Row(
@@ -269,7 +362,7 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                                   TextButton(
                                     onPressed: () {
                                       HapticFeedback.selectionClick();
-                                      onPrevious();
+                                      widget.onPrevious();
                                     },
                                     style: TextButton.styleFrom(
                                       foregroundColor: const Color(0xFF94A3B8),
@@ -287,7 +380,7 @@ class InteractiveOnboardingOverlay extends StatelessWidget {
                                   key: const ValueKey('onboarding_next_button'),
                                   onPressed: () {
                                     HapticFeedback.lightImpact();
-                                    onNext();
+                                    widget.onNext();
                                   },
                                   style: ElevatedButton.styleFrom(
                                     backgroundColor: AppColors.accent,

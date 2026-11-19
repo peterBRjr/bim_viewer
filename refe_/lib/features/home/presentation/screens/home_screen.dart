@@ -32,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
   late final HomeController _controller;
   bool _localTourVisible = false;
   int _localTourStep = 0;
+  bool _localDontShowAgain = true;
 
   @override
   void initState() {
@@ -92,6 +93,16 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {
         _localTourVisible = false;
         _localTourStep = 0;
+      });
+    }
+  }
+
+  void _onDontShowAgainChanged(bool value) {
+    if (widget.authController != null) {
+      widget.authController!.setDontShowAgain(value);
+    } else {
+      setState(() {
+        _localDontShowAgain = value;
       });
     }
   }
@@ -288,6 +299,9 @@ class _HomeScreenState extends State<HomeScreen> {
               Positioned.fill(
                 child: InteractiveOnboardingOverlay(
                   currentStep: _currentTourStep,
+                  initialDontShowAgain: widget.authController?.dontShowAgain ??
+                      _localDontShowAgain,
+                  onDontShowAgainChanged: _onDontShowAgainChanged,
                   onNext: _nextTourStep,
                   onPrevious: _previousTourStep,
                   onSkip: _skipTour,

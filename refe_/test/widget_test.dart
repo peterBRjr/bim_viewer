@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:refe_/main.dart';
+import 'package:refe_/features/auth/data/services/auth_local_service.dart';
 import 'package:refe_/features/auth/presentation/controllers/auth_controller.dart';
 import 'package:refe_/features/home/domain/models/project_model.dart';
 import 'package:refe_/features/home/data/services/storage_service.dart';
@@ -1198,6 +1199,8 @@ void main() {
         expect(authController.showOnboardingTour, isTrue);
         expect(find.text('ajustado.ifc'), findsOneWidget);
         expect(find.text('PASSO 1 DE 4'), findsOneWidget);
+        expect(find.text('Não mostrar ao entrar no app'), findsOneWidget);
+        expect(find.byKey(const ValueKey('onboarding_dont_show_again_checkbox')), findsOneWidget);
 
         // Avança pelos 4 passos do Tour Interativo
         await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
@@ -1216,6 +1219,98 @@ void main() {
         await tester.tap(find.byKey(const ValueKey('onboarding_next_button')));
         await tester.pumpAndSettle();
         expect(authController.showOnboardingTour, isFalse);
+      });
+
+      testWidgets('Onboarding Tour "Não mostrar ao entrar no app" checkbox suppresses tour on subsequent login and allows reopen via AppBar', (WidgetTester tester) async {
+        final ajustadoProject = ProjectModel(
+          id: 'proj-ajustado-002',
+          name: 'ajustado.ifc',
+          filePath: '/local/projects/ajustado.ifc',
+          fileSizeMB: 14.2,
+          format: 'IFC',
+          createdAt: DateTime(2026, 11, 17),
+        );
+        final fakeStorage = FakeStorageService(initial: [ajustadoProject]);
+        final homeController = HomeController(storageService: fakeStorage);
+        final authService = AuthLocalService();
+        final authController = AuthController(authService: authService);
+
+        await tester.pumpWidget(
+          BimViewerApp(
+            homeController: homeController,
+            authController: authController,
+            requireLogin: true,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // 1. Primeiro Login: Tour é exibido automaticamente
+        await tester.enterText(find.byKey(const ValueKey('login_username_field')), 'pedro');
+        await tester.enterText(find.byKey(const ValueKey('login_password_field')), '1234');
+        await tester.tap(find.byKey(const ValueKey('login_submit_button')));
+        await tester.pumpAndSettle();
+
+        expect(authController.showOnboardingTour, isTrue);
+        expect(find.byKey(const ValueKey('onboarding_dont_show_again_checkbox')), findsOneWidget);
+        expect(authController.dontShowAgain, isTrue);
+
+        // Testa alternância do checkbox (desmarcar e remarcar)
+        await tester.tap(find.byKey(const ValueKey('onboarding_dont_show_again_row')));
+        await tester.pumpAndSettle();
+        expect(authController.dontShowAgain, isFalse);
+
+        await tester.tap(find.byKey(const ValueKey('onboarding_dont_show_again_row')));
+        await tester.pumpAndSettle();
+        expect(authController.dontShowAgain, isTrue);
+
+        // Pula/Conclui o tour com o checkbox marcado
+        await tester.tap(find.byKey(const ValueKey('onboarding_skip_button')));
+        await tester.pumpAndSettle();
+        expect(authController.showOnboardingTour, isFalse);
+
+        // 2. Faz Logout
+        await tester.tap(find.byKey(const ValueKey('logout_button')));
+        await tester.pumpAndSettle();
+        expect(find.text('Visualizador BIM'), findsOneWidget);
+
+        // 3. Segundo Login: Não deve exibir o Tour automaticamente devido ao checkbox
+        await tester.enterText(find.byKey(const ValueKey('login_username_field')), 'pedro');
+        await tester.enterText(find.byKey(const ValueKey('login_password_field')), '1234');
+        await tester.tap(find.byKey(const ValueKey('login_submit_button')));
+        await tester.pumpAndSettle();
+
+        expect(authController.isAuthenticated, isTrue);
+        expect(authController.showOnboardingTour, isFalse);
+        expect(find.text('ajustado.ifc'), findsOneWidget);
+        expect(find.byKey(const ValueKey('onboarding_dont_show_again_checkbox')), findsNothing);
+
+        // 4. Reabre o tour manualmente pelo botão de ajuda da AppBar
+        await tester.tap(find.byKey(const ValueKey('reopen_onboarding_tour_button')));
+        await tester.pumpAndSettle();
+        expect(authController.showOnboardingTour, isTrue);
+        expect(find.text('PASSO 1 DE 4'), findsOneWidget);
+        expect(find.byKey(const ValueKey('onboarding_dont_show_again_checkbox')), findsOneWidget);
+
+        // 5. Desmarca "Não mostrar ao entrar no app" e fecha o tour
+        await tester.tap(find.byKey(const ValueKey('onboarding_dont_show_again_row')));
+        await tester.pumpAndSettle();
+        expect(authController.dontShowAgain, isFalse);
+
+        await tester.tap(find.byKey(const ValueKey('onboarding_skip_button')));
+        await tester.pumpAndSettle();
+        expect(authController.showOnboardingTour, isFalse);
+
+        // 6. Faz Logout e Login novamente: Tour deve voltar a abrir porque foi desmarcado
+        await tester.tap(find.byKey(const ValueKey('logout_button')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(find.byKey(const ValueKey('login_username_field')), 'pedro');
+        await tester.enterText(find.byKey(const ValueKey('login_password_field')), '1234');
+        await tester.tap(find.byKey(const ValueKey('login_submit_button')));
+        await tester.pumpAndSettle();
+
+        expect(authController.showOnboardingTour, isTrue);
+        expect(find.text('PASSO 1 DE 4'), findsOneWidget);
       });
 
       testWidgets('IfcExportGuideScreen toggles and slides across Básico, Médio and Detalhado (iOS) levels', (WidgetTester tester) async {

@@ -11,6 +11,7 @@ class AuthController extends ChangeNotifier {
   String? _errorMessage;
   bool _showOnboardingTour = false;
   int _onboardingStep = 0;
+  bool _dontShowAgain = true;
 
   AuthController({
     AuthLocalService? authService,
@@ -34,6 +35,7 @@ class AuthController extends ChangeNotifier {
   String? get errorMessage => _errorMessage;
   bool get showOnboardingTour => _showOnboardingTour;
   int get onboardingStep => _onboardingStep;
+  bool get dontShowAgain => _dontShowAgain;
 
   void clearError() {
     if (_errorMessage != null) {
@@ -42,7 +44,7 @@ class AuthController extends ChangeNotifier {
     }
   }
 
-  /// Realiza login no banco local (padrão: `pedro` / `1234`) e aciona o Guia Interativo na entrada.
+  /// Realiza login no banco local (padrão: `pedro` / `1234`) e aciona o Guia Interativo se o usuário ainda não optou por ocultá-lo.
   Future<bool> login(String username, String password) async {
     _isLoading = true;
     _errorMessage = null;
@@ -58,8 +60,10 @@ class AuthController extends ChangeNotifier {
       }
 
       _currentUser = account;
+      final completed = await _authService.hasCompletedTutorial(account.username);
+      _dontShowAgain = completed ? true : true;
       _onboardingStep = 0;
-      _showOnboardingTour = true;
+      _showOnboardingTour = !completed;
       _isLoading = false;
       notifyListeners();
       return true;
@@ -90,6 +94,7 @@ class AuthController extends ChangeNotifier {
         role: role,
       );
       _currentUser = account;
+      _dontShowAgain = true;
       _onboardingStep = 0;
       _showOnboardingTour = true;
       _isLoading = false;
@@ -119,16 +124,36 @@ class AuthController extends ChangeNotifier {
     }
   }
 
-  Future<void> completeOnboardingTour() async {
+  Future<void> setDontShowAgain(bool value) async {
+    _dontShowAgain = value;
+    notifyListeners();
+    if (_currentUser != null) {
+      await _authService.setTutorialCompleted(
+        _currentUser!.username,
+        completed: value,
+      );
+    }
+  }
+
+  Future<void> completeOnboardingTour({bool? dontShowAgain}) async {
+    if (dontShowAgain != null) {
+      _dontShowAgain = dontShowAgain;
+    }
     _showOnboardingTour = false;
     _onboardingStep = 0;
     notifyListeners();
     if (_currentUser != null) {
-      await _authService.setTutorialCompleted(_currentUser!.username, completed: true);
+      await _authService.setTutorialCompleted(
+        _currentUser!.username,
+        completed: _dontShowAgain,
+      );
     }
   }
 
-  void startOnboardingTour() {
+  Future<void> startOnboardingTour() async {
+    if (_currentUser != null) {
+      _dontShowAgain = await _authService.hasCompletedTutorial(_currentUser!.username);
+    }
     _onboardingStep = 0;
     _showOnboardingTour = true;
     notifyListeners();
@@ -138,6 +163,7 @@ class AuthController extends ChangeNotifier {
     _currentUser = null;
     _showOnboardingTour = false;
     _onboardingStep = 0;
+    _dontShowAgain = false;
     _errorMessage = null;
     notifyListeners();
   }
