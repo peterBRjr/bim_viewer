@@ -1327,18 +1327,26 @@ void main() {
         expect(bridge.lastShowPrecast, isTrue);
         expect(bridge.lastShowSteel, isFalse);
 
-        // 3. Restaura visualização completa
-        await controller.resetStageFilter();
+        // 4. Teste de modos de filtro via enum (StageFilterMode)
+        await controller.setStageFilterMode(StageFilterMode.foundation);
+        expect(controller.currentStageFilterMode, StageFilterMode.foundation);
+        expect(controller.filterFoundation, isTrue);
+        expect(controller.filterPrecast, isFalse);
+        expect(controller.filterSteel, isFalse);
+
+        await controller.setStageFilterMode(StageFilterMode.steel);
+        expect(controller.currentStageFilterMode, StageFilterMode.steel);
+        expect(controller.filterFoundation, isFalse);
+        expect(controller.filterSteel, isTrue);
+
+        await controller.setStageFilterMode(StageFilterMode.all);
+        expect(controller.currentStageFilterMode, StageFilterMode.all);
         expect(controller.filterFoundation, isTrue);
         expect(controller.filterPrecast, isTrue);
         expect(controller.filterSteel, isTrue);
-        expect(controller.isStageFilterActive, isFalse);
-        expect(bridge.lastShowFoundation, isTrue);
-        expect(bridge.lastShowPrecast, isTrue);
-        expect(bridge.lastShowSteel, isTrue);
       });
 
-      testWidgets('ConstructionStageFilterBar renders stage chips, badges, and triggers isolate and toggle callbacks', (WidgetTester tester) async {
+      testWidgets('ConstructionStageFilterButton renders floating FAB with status, opens Dialog with Radio Buttons and filters correctly', (WidgetTester tester) async {
         final bridge = RecordingViewer3dJsBridge();
         final controller = Viewer3DController(jsBridge: bridge);
         addTearDown(controller.dispose);
@@ -1358,7 +1366,7 @@ void main() {
               body: ListenableBuilder(
                 listenable: controller,
                 builder: (context, _) {
-                  return ConstructionStageFilterBar(controller: controller);
+                  return ConstructionStageFilterButton(controller: controller);
                 },
               ),
             ),
@@ -1366,39 +1374,73 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Verifica renderização dos 4 chips principais com emojis e badges de contagem
-        expect(find.byKey(const ValueKey('stage_chip_foundation')), findsOneWidget);
-        expect(find.byKey(const ValueKey('stage_chip_precast')), findsOneWidget);
-        expect(find.byKey(const ValueKey('stage_chip_steel')), findsOneWidget);
-        expect(find.byKey(const ValueKey('stage_chip_all')), findsOneWidget);
+        // 1. Verifica renderização do botão flutuante com indicação padrão (Obra Completa)
+        expect(find.byKey(const ValueKey('stage_filter_floating_button')), findsOneWidget);
+        expect(find.text('FILTRO VISUAL'), findsOneWidget);
+        expect(find.text('Obra Completa'), findsOneWidget);
 
-        expect(find.text('Fundação'), findsOneWidget);
-        expect(find.text('38'), findsOneWidget);
-        expect(find.text('Pré-Moldado'), findsOneWidget);
-        expect(find.text('84'), findsOneWidget);
-        expect(find.text('Metálica'), findsOneWidget);
-        expect(find.text('142'), findsOneWidget);
-        expect(find.text('Ver Tudo'), findsOneWidget);
-
-        // Long press em Fundação para isolar apenas fundações sob o solo
-        await tester.longPress(find.byKey(const ValueKey('stage_chip_foundation')));
+        // 2. Clica no botão flutuante para abrir o showDialog com os Radio Buttons
+        await tester.tap(find.byKey(const ValueKey('stage_filter_floating_button')));
         await tester.pumpAndSettle();
 
+        // Verifica abertura do Dialog
+        expect(find.byKey(const ValueKey('construction_stage_filter_dialog')), findsOneWidget);
+        expect(find.text('Filtro de Visualização'), findsOneWidget);
+
+        // Verifica as 4 opções com Radio Buttons
+        expect(find.byKey(const ValueKey('stage_radio_all')), findsOneWidget);
+        expect(find.byKey(const ValueKey('stage_radio_foundation')), findsOneWidget);
+        expect(find.byKey(const ValueKey('stage_radio_precast')), findsOneWidget);
+        expect(find.byKey(const ValueKey('stage_radio_steel')), findsOneWidget);
+
+        expect(find.text('38 peças'), findsOneWidget);
+        expect(find.text('84 peças'), findsOneWidget);
+        expect(find.text('142 peças'), findsOneWidget);
+
+        // 3. Seleciona o Radio Button de Fundação
+        await tester.tap(find.byKey(const ValueKey('stage_radio_foundation')));
+        await tester.pumpAndSettle();
+
+        expect(controller.currentStageFilterMode, StageFilterMode.foundation);
         expect(controller.filterFoundation, isTrue);
         expect(controller.filterPrecast, isFalse);
         expect(controller.filterSteel, isFalse);
-        expect(find.byKey(const ValueKey('stage_filter_active_banner')), findsOneWidget);
-        expect(find.textContaining('Isolado: Fundação (38 peças)'), findsOneWidget);
+        expect(controller.isStageFilterActive, isTrue);
 
-        // Toque em "Restaurar Obra" no banner ativo
-        await tester.tap(find.byKey(const ValueKey('stage_filter_restore_button')));
+        // 4. Seleciona o Radio Button de Estrutura Metálica
+        await tester.tap(find.byKey(const ValueKey('stage_radio_steel')));
         await tester.pumpAndSettle();
 
+        expect(controller.currentStageFilterMode, StageFilterMode.steel);
+        expect(controller.filterSteel, isTrue);
+        expect(controller.filterFoundation, isFalse);
+        expect(controller.filterPrecast, isFalse);
+
+        // 5. Clica no botão "Concluir" para fechar o diálogo
+        await tester.tap(find.byKey(const ValueKey('confirm_stage_filter_dialog_button')));
+        await tester.pumpAndSettle();
+
+        // Diálogo fechou e o botão flutuante agora indica "Metálica"
+        expect(find.byKey(const ValueKey('construction_stage_filter_dialog')), findsNothing);
+        expect(find.text('Metálica'), findsOneWidget);
+
+        // 6. Reabre o diálogo e seleciona "Obra Completa"
+        await tester.tap(find.byKey(const ValueKey('stage_filter_floating_button')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const ValueKey('stage_radio_all')));
+        await tester.pumpAndSettle();
+
+        expect(controller.currentStageFilterMode, StageFilterMode.all);
         expect(controller.isStageFilterActive, isFalse);
         expect(controller.filterFoundation, isTrue);
         expect(controller.filterPrecast, isTrue);
         expect(controller.filterSteel, isTrue);
-        expect(find.byKey(const ValueKey('stage_filter_active_banner')), findsNothing);
+
+        await tester.tap(find.byKey(const ValueKey('close_stage_filter_dialog_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Obra Completa'), findsOneWidget);
       });
     });
   });

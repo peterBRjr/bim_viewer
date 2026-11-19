@@ -83,3 +83,37 @@ class ConstructionStagesSummary {
       'ConstructionStagesSummary(fundação: $foundationCount, pré-moldado: $precastCount, metálica: $steelCount, outros: $otherCount)';
 }
 
+/// Modo de seleção exclusivo (Radio Button) para o filtro de visualização de etapas.
+enum StageFilterMode {
+  all,
+  foundation,
+  precast,
+  steel;
+
+  String get label {
+    switch (this) {
+      case StageFilterMode.all:
+        return 'Obra Completa';
+      case StageFilterMode.foundation:
+        return 'Fundação';
+      case StageFilterMode.precast:
+        return 'Pré-Moldado';
+      case StageFilterMode.steel:
+        return 'Estrutura Metálica';
+    }
+  }
+
+  String get description {
+    switch (this) {
+      case StageFilterMode.all:
+        return 'Visualização de todas as estruturas e etapas da obra';
+      case StageFilterMode.foundation:
+        return 'Sapatas, blocos de coroamento, estacas e baldrames';
+      case StageFilterMode.precast:
+        return 'Pilares de concreto, vigas portantes e painéis';
+      case StageFilterMode.steel:
+        return 'Perfis laminados, treliças espaciais e terças';
+    }
+  }
+}
+

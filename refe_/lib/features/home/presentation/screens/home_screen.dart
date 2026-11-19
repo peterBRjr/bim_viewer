@@ -217,9 +217,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   IconButton(
                     key: const ValueKey('open_ifc_export_guide_button'),
                     visualDensity: VisualDensity.compact,
-                    tooltip: 'Guia de Exportação IFC',
+                    tooltip: 'Como Exportar IFC (Guia)',
                     icon: const Icon(
-                      Icons.tune_rounded,
+                      Icons.menu_book_rounded,
                       color: Color(0xFF38BDF8),
                     ),
                     onPressed: () => _openIfcExportGuide(),
@@ -316,80 +316,34 @@ class _HomeScreenState extends State<HomeScreen> {
         color: AppColors.surface,
         border: Border(bottom: BorderSide(color: AppColors.border)),
       ),
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 10,
-        runSpacing: 8,
+      child: Row(
         children: [
-          Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Icon(
-                  Icons.engineering_rounded,
-                  size: 16,
-                  color: AppColors.primary,
-                ),
-              ),
-              const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  userName != null && userName.isNotEmpty
-                      ? 'Olá, $userName • Catálogo Oficial iOS'
-                      : 'Catálogo Oficial de Engenharia BIM',
-                  style: const TextStyle(
-                    fontFamily: AppTypography.fontFamily,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textDark,
-                  ),
-                ),
-              ),
-            ],
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: AppColors.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Icon(
+              Icons.engineering_rounded,
+              size: 16,
+              color: AppColors.primary,
+            ),
           ),
-          InkWell(
-            key: const ValueKey('banner_ifc_export_guide_card'),
-            onTap: () => _openIfcExportGuide(),
-            borderRadius: BorderRadius.circular(18),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.accent.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(
-                  color: AppColors.accent.withValues(alpha: 0.30),
-                ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              userName != null && userName.isNotEmpty
+                  ? 'Olá, $userName • Catálogo Oficial'
+                  : 'Catálogo Oficial de Engenharia BIM',
+              style: const TextStyle(
+                fontFamily: AppTypography.fontFamily,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textDark,
               ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    Icons.menu_book_rounded,
-                    size: 14,
-                    color: AppColors.accent,
-                  ),
-                  SizedBox(width: 6),
-                  Flexible(
-                    child: Text(
-                      'Como Exportar IFC (Básico • Médio • Detalhado)',
-                      style: TextStyle(
-                        fontFamily: AppTypography.fontFamily,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.accent,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ],
-              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
         ],

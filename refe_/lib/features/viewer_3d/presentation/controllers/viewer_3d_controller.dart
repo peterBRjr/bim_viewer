@@ -64,7 +64,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   BimProjectSpecs? _projectSpecs;
   BimElementMetadata? _preDynamicElement;
   int? _preDynamicIsolatedElementId;
-  bool _wasLandscapeBeforeDynamic = false;
   Timer? _viewportResizeTimer;
   Timer? _elementSwitchWatchdog;
   bool _isDisposed = false;
@@ -124,6 +123,20 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   bool get filterSteel => _filterSteel;
   bool get isStageFilterActive =>
       !(_filterFoundation && _filterPrecast && _filterSteel);
+
+  StageFilterMode get currentStageFilterMode {
+    if (_filterFoundation && !_filterPrecast && !_filterSteel) {
+      return StageFilterMode.foundation;
+    }
+    if (!_filterFoundation && _filterPrecast && !_filterSteel) {
+      return StageFilterMode.precast;
+    }
+    if (!_filterFoundation && !_filterPrecast && _filterSteel) {
+      return StageFilterMode.steel;
+    }
+    return StageFilterMode.all;
+  }
+
   bool isStageActive(ConstructionStage stage) {
     switch (stage) {
       case ConstructionStage.foundation:
@@ -385,6 +398,27 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     await _applyStageFilters(autoFocus: false);
   }
 
+  /// Aplica a seleção de modo via Radio Button (Obra Completa, Fundação, Pré-Moldado ou Metálica).
+  Future<void> setStageFilterMode(
+    StageFilterMode mode, {
+    bool autoFocus = true,
+  }) async {
+    switch (mode) {
+      case StageFilterMode.all:
+        await resetStageFilter();
+        break;
+      case StageFilterMode.foundation:
+        await isolateStage(ConstructionStage.foundation, autoFocus: autoFocus);
+        break;
+      case StageFilterMode.precast:
+        await isolateStage(ConstructionStage.precast, autoFocus: autoFocus);
+        break;
+      case StageFilterMode.steel:
+        await isolateStage(ConstructionStage.steel, autoFocus: autoFocus);
+        break;
+    }
+  }
+
   Future<void> _applyStageFilters({bool autoFocus = true}) async {
     notifyListeners();
     await _jsBridge.setConstructionStageFilter(
@@ -410,7 +444,6 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     if (!_isDynamicViewActive) {
       _preDynamicElement = _selectedElement;
       _preDynamicIsolatedElementId = _isolatedElementId;
-      _wasLandscapeBeforeDynamic = currentlyLandscape;
     }
 
     _isDynamicViewActive = true;
@@ -615,19 +648,24 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
 
   void _restorePreviousOrientationSafe() {
     try {
-      if (_wasLandscapeBeforeDynamic) {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.landscapeLeft,
-          DeviceOrientation.landscapeRight,
-        ]).catchError((_) {});
-      } else {
-        // Mantém fixo em portraitUp para evitar que o acelerômetro gire de volta para horizontal
-        // caso o usuário ainda esteja segurando o celular deitado no instante em que clicou em Voltar.
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-        ]).catchError((_) {});
-      }
+      // Libera as orientações (vertical e horizontal) para que o usuário gire o aparelho livremente
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]).catchError((_) {});
     } catch (_) {}
+  }
+
+  /// Notifica a engine WebGL para redimensionar o canvas após mudanças de orientação ou tela.
+  void notifyViewportResized() {
+    _viewportResizeTimer?.cancel();
+    _viewportResizeTimer = Timer(const Duration(milliseconds: 150), () {
+      if (!_isDisposed) {
+        _jsBridge.notifyViewportResized();
+      }
+    });
   }
 
   // =========================================================================

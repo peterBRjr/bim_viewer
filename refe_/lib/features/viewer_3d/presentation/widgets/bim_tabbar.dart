@@ -113,7 +113,9 @@ class _NubankBimTabBarState extends State<NubankBimTabBar> with SingleTickerProv
         child: Align(
           alignment: Alignment.bottomCenter,
           child: Padding(
-            padding: const EdgeInsets.only(bottom: 16),
+            padding: EdgeInsets.only(
+              bottom: MediaQuery.of(context).orientation == Orientation.landscape ? 8 : 16,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [

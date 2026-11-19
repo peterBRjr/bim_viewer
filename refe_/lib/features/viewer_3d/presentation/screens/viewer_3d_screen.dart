@@ -34,21 +34,43 @@ class Viewer3dScreen extends StatefulWidget {
   State<Viewer3dScreen> createState() => _Viewer3dScreenState();
 }
 
-class _Viewer3dScreenState extends State<Viewer3dScreen> {
+class _Viewer3dScreenState extends State<Viewer3dScreen> with WidgetsBindingObserver {
   late final Viewer3DController _controller;
   int _webViewRecreationId = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _controller = widget.controller ?? Viewer3DController();
     LocalhostServerService.start();
+
+    // Libera a rotação para visualização vertical e horizontal
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]).catchError((_) {});
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    _controller.notifyViewportResized();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     try {
-      SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]).catchError((_) {});
+      // Mantém a rotação liberada
+      SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]).catchError((_) {});
     } catch (_) {}
     if (widget.controller == null) {
       _controller.dispose();
@@ -333,7 +355,7 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                         onExit: () => _controller.exitDynamicView(),
                       ),
 
-                    // Barra Flutuante de Filtro por Etapas da Obra (Fundação • Pré-Moldado • Estrutura Metálica)
+                    // Botão Flutuante de Filtro por Etapas da Obra com indicação e Dialog (Fundação • Pré-Moldado • Estrutura Metálica)
                     if (!isDynamic &&
                         !_controller.isLoading &&
                         _controller.errorMessage == null &&
@@ -341,8 +363,7 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                       Positioned(
                         top: 0,
                         left: 0,
-                        right: 0,
-                        child: ConstructionStageFilterBar(
+                        child: ConstructionStageFilterButton(
                           controller: _controller,
                         ),
                       ),
