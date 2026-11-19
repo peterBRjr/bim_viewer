@@ -10,10 +10,12 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../../../../core/services/localhost_server_service.dart';
 import '../../data/services/viewer_3d_js_bridge.dart';
 import '../../domain/models/bim_element_metadata.dart';
+import '../../domain/models/construction_stage_model.dart';
 import '../../domain/models/measurement_model.dart';
 import '../../domain/models/proximity_dimension_model.dart';
 
 export '../../domain/models/bim_element_metadata.dart';
+export '../../domain/models/construction_stage_model.dart';
 export '../../domain/models/proximity_dimension_model.dart';
 
 /// Controller reativo responsável pelo gerenciamento de estado da UI e
@@ -45,6 +47,12 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   double _sectionCutRatio = 0.75;
   String _currentCameraView = 'iso';
   bool _renderProcessCrashed = false;
+
+  // Estado do Filtro por Etapas da Obra (Fundação • Pré-Moldado • Estrutura Metálica)
+  ConstructionStagesSummary? _stagesSummary;
+  bool _filterFoundation = true;
+  bool _filterPrecast = true;
+  bool _filterSteel = true;
 
   // Estado da Visualização Dinâmica Horizontal (Split-Screen Personalizável + Níveis + Specs openBIM)
   bool _isDynamicViewActive = false;
@@ -112,6 +120,26 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
   double get sectionCutRatio => _sectionCutRatio;
   String get currentCameraView => _currentCameraView;
   bool get renderProcessCrashed => _renderProcessCrashed;
+
+  // Getters do Filtro por Etapas da Obra (Fundação • Pré-Moldado • Estrutura Metálica)
+  ConstructionStagesSummary? get stagesSummary => _stagesSummary;
+  bool get filterFoundation => _filterFoundation;
+  bool get filterPrecast => _filterPrecast;
+  bool get filterSteel => _filterSteel;
+  bool get isStageFilterActive =>
+      !(_filterFoundation && _filterPrecast && _filterSteel);
+  bool isStageActive(ConstructionStage stage) {
+    switch (stage) {
+      case ConstructionStage.foundation:
+        return _filterFoundation;
+      case ConstructionStage.precast:
+        return _filterPrecast;
+      case ConstructionStage.steel:
+        return _filterSteel;
+      case ConstructionStage.other:
+        return true;
+    }
+  }
 
   // Getters da Visualização Dinâmica Horizontal
   bool get isDynamicViewActive => _isDynamicViewActive;
@@ -289,6 +317,96 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     if (_isDisposed) return;
     _proximityDimension = proximity;
     notifyListeners();
+  }
+
+  @override
+  void onConstructionStagesLoaded(ConstructionStagesSummary summary) {
+    if (_isDisposed) return;
+    _stagesSummary = summary;
+    notifyListeners();
+  }
+
+  // =========================================================================
+  // COMANDOS DO FILTRO POR ETAPAS DA OBRA (FUNDAÇÃO, PRÉ-MOLDADO, METÁLICA)
+  // =========================================================================
+
+  /// Alterna a visibilidade de uma etapa da obra (suporta multi-seleção).
+  Future<void> toggleStage(
+    ConstructionStage stage, {
+    bool autoFocus = true,
+  }) async {
+    switch (stage) {
+      case ConstructionStage.foundation:
+        _filterFoundation = !_filterFoundation;
+        break;
+      case ConstructionStage.precast:
+        _filterPrecast = !_filterPrecast;
+        break;
+      case ConstructionStage.steel:
+        _filterSteel = !_filterSteel;
+        break;
+      case ConstructionStage.other:
+        break;
+    }
+
+    // Se todas ficarem desativadas, restaura todas
+    if (!_filterFoundation && !_filterPrecast && !_filterSteel) {
+      _filterFoundation = true;
+      _filterPrecast = true;
+      _filterSteel = true;
+    }
+
+    await _applyStageFilters(autoFocus: autoFocus);
+  }
+
+  /// Isola exclusivamente uma única etapa da obra (desativa as outras duas).
+  Future<void> isolateStage(
+    ConstructionStage stage, {
+    bool autoFocus = true,
+  }) async {
+    switch (stage) {
+      case ConstructionStage.foundation:
+        _filterFoundation = true;
+        _filterPrecast = false;
+        _filterSteel = false;
+        break;
+      case ConstructionStage.precast:
+        _filterFoundation = false;
+        _filterPrecast = true;
+        _filterSteel = false;
+        break;
+      case ConstructionStage.steel:
+        _filterFoundation = false;
+        _filterPrecast = false;
+        _filterSteel = true;
+        break;
+      case ConstructionStage.other:
+        _filterFoundation = true;
+        _filterPrecast = true;
+        _filterSteel = true;
+        break;
+    }
+
+    await _applyStageFilters(autoFocus: autoFocus);
+  }
+
+  /// Restaura a visualização integral de todas as etapas da obra.
+  Future<void> resetStageFilter() async {
+    _filterFoundation = true;
+    _filterPrecast = true;
+    _filterSteel = true;
+    await _applyStageFilters(autoFocus: false);
+  }
+
+  Future<void> _applyStageFilters({bool autoFocus = true}) async {
+    notifyListeners();
+    await _jsBridge.setConstructionStageFilter(
+      showFoundation: _filterFoundation,
+      showPrecast: _filterPrecast,
+      showSteel: _filterSteel,
+      showOther: true,
+      autoFocusFoundation: autoFocus,
+    );
   }
 
   // =========================================================================
@@ -549,6 +667,10 @@ class Viewer3DController extends ChangeNotifier implements Viewer3dJsBridgeListe
     _errorMessage = null;
     _selectedElement = null;
     _projectSpecs = null;
+    _stagesSummary = null;
+    _filterFoundation = true;
+    _filterPrecast = true;
+    _filterSteel = true;
     _selectedStoreyFilterId = null;
     _highlightSimilarIn3D = false;
     _isDynamicXrayActive = false;

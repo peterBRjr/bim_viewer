@@ -563,6 +563,14 @@ async function loadIfcModel(arrayBuffer) {
       console.warn('Erro ao indexar metadados BIM e pavimentos:', e);
     }
 
+    try {
+      if (typeof buildConstructionStageIndex === 'function') {
+        await buildConstructionStageIndex(ifcModel.modelID);
+      }
+    } catch (e) {
+      console.warn('Erro ao classificar etapas da obra (Fundação/Pré/Metálica):', e);
+    }
+
     notifyFlutter('onLoadingProgress', { progress: 100 });
     const hudEl = document.getElementById('hud-text');
     if (hudEl) hudEl.innerText = 'Modelo IFC Renderizado (WebAssembly)';

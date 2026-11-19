@@ -13,6 +13,7 @@ import '../../../home/domain/models/project_model.dart';
 import '../controllers/viewer_3d_controller.dart';
 import '../widgets/bim_metadata_bottom_sheet.dart';
 import '../widgets/bim_tabbar.dart';
+import '../widgets/construction_stage_filter_bar.dart';
 import '../widgets/dynamic_bim_workspace.dart';
 import '../widgets/hidden_elements_bottom_sheet.dart';
 import '../widgets/measure_mode_overlay.dart';
@@ -330,6 +331,20 @@ class _Viewer3dScreenState extends State<Viewer3dScreen> {
                         totalWidth: totalWidth,
                         leftViewportWidth: leftViewportWidth,
                         onExit: () => _controller.exitDynamicView(),
+                      ),
+
+                    // Barra Flutuante de Filtro por Etapas da Obra (Fundação • Pré-Moldado • Estrutura Metálica)
+                    if (!isDynamic &&
+                        !_controller.isLoading &&
+                        _controller.errorMessage == null &&
+                        !_controller.isMeasureMode)
+                      Positioned(
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        child: ConstructionStageFilterBar(
+                          controller: _controller,
+                        ),
                       ),
 
                     // Controle Deslizante de Plano de Corte Horizontal (Section Cut estilo BIM 360)

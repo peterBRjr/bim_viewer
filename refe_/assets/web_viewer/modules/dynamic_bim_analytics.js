@@ -102,6 +102,9 @@ function resetBimAnalyticsState() {
   state.lastProximityData = null;
   state.occludedGhostIds.clear();
   state.occludedSavedMaterials.clear();
+  if (typeof resetStageFilterState === 'function') {
+    resetStageFilterState();
+  }
 }
 
 /**
@@ -820,6 +823,9 @@ async function extractModelBimMetadataAndSpatialIndex(modelID) {
   };
 
   notifyFlutter('onBimProjectSpecsLoaded', state.bimProjectSpecs);
+  if (typeof buildConstructionStageIndex === 'function') {
+    buildConstructionStageIndex(undefined);
+  }
 }
 
 /**
@@ -886,6 +892,9 @@ function buildGltfFallbackSpecs(modelGroup) {
   };
 
   notifyFlutter('onBimProjectSpecsLoaded', state.bimProjectSpecs);
+  if (typeof buildConstructionStageIndex === 'function') {
+    buildConstructionStageIndex(undefined);
+  }
 }
 
 /**

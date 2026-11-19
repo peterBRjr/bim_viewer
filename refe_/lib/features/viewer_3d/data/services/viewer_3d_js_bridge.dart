@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import '../../domain/models/bim_element_metadata.dart';
+import '../../domain/models/construction_stage_model.dart';
 import '../../domain/models/measurement_model.dart';
 import '../../domain/models/proximity_dimension_model.dart';
 
@@ -21,6 +22,7 @@ abstract class Viewer3dJsBridgeListener {
   void onBimProjectSpecsLoaded(BimProjectSpecs specs);
   void onElementTransitionBusy(int expressID) {}
   void onProximityDimensionCalculated(ProximityDimensionModel proximity) {}
+  void onConstructionStagesLoaded(ConstructionStagesSummary summary) {}
 }
 
 /// Serviço responsável por encapsular a comunicação bidirecional (JS Bridge)
@@ -198,6 +200,18 @@ class Viewer3dJsBridge {
         }
       },
     );
+
+    // 11. Quantitativos de elementos por etapas da obra (Fundação, Pré-Moldado e Metálica)
+    controller.addJavaScriptHandler(
+      handlerName: 'onConstructionStagesLoaded',
+      callback: (args) {
+        if (args.isNotEmpty && args[0] is Map) {
+          final data = (args[0] as Map).cast<String, dynamic>();
+          final summary = ConstructionStagesSummary.fromMap(data);
+          _listener?.onConstructionStagesLoaded(summary);
+        }
+      },
+    );
   }
 
   // =========================================================================
@@ -351,6 +365,26 @@ class Viewer3dJsBridge {
   Future<void> setProximityDimensionEnabled(bool enabled) async {
     await _controller?.evaluateJavascript(
       source: 'if (window.setProximityDimensionEnabled) window.setProximityDimensionEnabled($enabled);',
+    );
+  }
+
+  /// Aplica o filtro de visibilidade por etapas construtivas da obra (Fundação, Pré-Moldado e Metálica).
+  Future<void> setConstructionStageFilter({
+    required bool showFoundation,
+    required bool showPrecast,
+    required bool showSteel,
+    bool showOther = true,
+    bool autoFocusFoundation = true,
+  }) async {
+    await _controller?.evaluateJavascript(
+      source:
+          'if (window.setConstructionStageFilter) window.setConstructionStageFilter({'
+          'showFoundation: $showFoundation, '
+          'showPrecast: $showPrecast, '
+          'showSteel: $showSteel, '
+          'showOther: $showOther, '
+          'autoFocusFoundation: $autoFocusFoundation'
+          '});',
     );
   }
 }

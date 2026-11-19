@@ -16,6 +16,7 @@ import 'package:refe_/features/viewer_3d/presentation/widgets/bim_tabbar.dart';
 import 'package:refe_/features/viewer_3d/presentation/widgets/dynamic_bim_workspace.dart';
 import 'package:refe_/features/viewer_3d/domain/models/measurement_model.dart';
 import 'package:refe_/features/viewer_3d/domain/utils/bim_nomenclature_mapper.dart';
+import 'package:refe_/features/viewer_3d/presentation/widgets/construction_stage_filter_bar.dart';
 import 'package:refe_/features/viewer_3d/presentation/widgets/measure_mode_overlay.dart';
 
 class FakeStorageService extends StorageService {
@@ -65,6 +66,27 @@ class RecordingViewer3dJsBridge extends Viewer3dJsBridge {
   @override
   Future<void> setProximityDimensionEnabled(bool enabled) async {
     proximityEnabled = enabled;
+  }
+
+  bool? lastShowFoundation;
+  bool? lastShowPrecast;
+  bool? lastShowSteel;
+  bool? lastShowOther;
+  bool? lastAutoFocusFoundation;
+
+  @override
+  Future<void> setConstructionStageFilter({
+    required bool showFoundation,
+    required bool showPrecast,
+    required bool showSteel,
+    bool showOther = true,
+    bool autoFocusFoundation = true,
+  }) async {
+    lastShowFoundation = showFoundation;
+    lastShowPrecast = showPrecast;
+    lastShowSteel = showSteel;
+    lastShowOther = showOther;
+    lastAutoFocusFoundation = autoFocusFoundation;
   }
 }
 
@@ -1336,6 +1358,151 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Exportação Detalhada (Teto Gráfico iOS / Apple Metal)'), findsOneWidget);
         expect(find.text('50 MB a 120 MB (Teto Seguro iOS)'), findsOneWidget);
+      });
+    });
+
+    group('Construction Stage Visibility Filter Tests (Fundação, Pré-Moldado & Estrutura Metálica)', () {
+      test('ConstructionStagesSummary parses map and serializes symmetrically', () {
+        final rawMap = {
+          'foundationCount': 38,
+          'precastCount': 84,
+          'steelCount': 142,
+          'otherCount': 12,
+          'totalCount': 276,
+        };
+
+        final summary = ConstructionStagesSummary.fromMap(rawMap);
+        expect(summary.foundationCount, 38);
+        expect(summary.precastCount, 84);
+        expect(summary.steelCount, 142);
+        expect(summary.otherCount, 12);
+        expect(summary.totalCount, 276);
+        expect(summary.hasAnyStages, isTrue);
+
+        final serialized = summary.toMap();
+        expect(serialized['foundationCount'], 38);
+        expect(serialized['precastCount'], 84);
+        expect(serialized['steelCount'], 142);
+        expect(serialized['otherCount'], 12);
+        expect(serialized['totalCount'], 276);
+      });
+
+      test('Viewer3DController manages construction stages state, toggles, isolation and reset', () async {
+        final bridge = RecordingViewer3dJsBridge();
+        final controller = Viewer3DController(jsBridge: bridge);
+        addTearDown(controller.dispose);
+        controller.onViewerReady();
+
+        expect(controller.filterFoundation, isTrue);
+        expect(controller.filterPrecast, isTrue);
+        expect(controller.filterSteel, isTrue);
+        expect(controller.isStageFilterActive, isFalse);
+
+        final summary = ConstructionStagesSummary(
+          foundationCount: 38,
+          precastCount: 84,
+          steelCount: 142,
+          otherCount: 12,
+          totalCount: 276,
+        );
+        controller.onConstructionStagesLoaded(summary);
+        expect(controller.stagesSummary?.foundationCount, 38);
+        expect(controller.stagesSummary?.precastCount, 84);
+        expect(controller.stagesSummary?.steelCount, 142);
+
+        // 1. Isola apenas a Fundação
+        await controller.isolateStage(ConstructionStage.foundation);
+        expect(controller.filterFoundation, isTrue);
+        expect(controller.filterPrecast, isFalse);
+        expect(controller.filterSteel, isFalse);
+        expect(controller.isStageFilterActive, isTrue);
+        expect(bridge.lastShowFoundation, isTrue);
+        expect(bridge.lastShowPrecast, isFalse);
+        expect(bridge.lastShowSteel, isFalse);
+        expect(bridge.lastAutoFocusFoundation, isTrue);
+
+        // 2. Adiciona Pré-Moldado na visualização (Fundação + Pré-Moldado)
+        await controller.toggleStage(ConstructionStage.precast);
+        expect(controller.filterFoundation, isTrue);
+        expect(controller.filterPrecast, isTrue);
+        expect(controller.filterSteel, isFalse);
+        expect(controller.isStageFilterActive, isTrue);
+        expect(bridge.lastShowFoundation, isTrue);
+        expect(bridge.lastShowPrecast, isTrue);
+        expect(bridge.lastShowSteel, isFalse);
+
+        // 3. Restaura visualização completa
+        await controller.resetStageFilter();
+        expect(controller.filterFoundation, isTrue);
+        expect(controller.filterPrecast, isTrue);
+        expect(controller.filterSteel, isTrue);
+        expect(controller.isStageFilterActive, isFalse);
+        expect(bridge.lastShowFoundation, isTrue);
+        expect(bridge.lastShowPrecast, isTrue);
+        expect(bridge.lastShowSteel, isTrue);
+      });
+
+      testWidgets('ConstructionStageFilterBar renders stage chips, badges, and triggers isolate and toggle callbacks', (WidgetTester tester) async {
+        final bridge = RecordingViewer3dJsBridge();
+        final controller = Viewer3DController(jsBridge: bridge);
+        addTearDown(controller.dispose);
+        controller.onViewerReady();
+
+        final summary = ConstructionStagesSummary(
+          foundationCount: 38,
+          precastCount: 84,
+          steelCount: 142,
+          totalCount: 264,
+        );
+        controller.onConstructionStagesLoaded(summary);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ListenableBuilder(
+                listenable: controller,
+                builder: (context, _) {
+                  return ConstructionStageFilterBar(controller: controller);
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Verifica renderização dos 4 chips principais com emojis e badges de contagem
+        expect(find.byKey(const ValueKey('stage_chip_foundation')), findsOneWidget);
+        expect(find.byKey(const ValueKey('stage_chip_precast')), findsOneWidget);
+        expect(find.byKey(const ValueKey('stage_chip_steel')), findsOneWidget);
+        expect(find.byKey(const ValueKey('stage_chip_all')), findsOneWidget);
+
+        expect(find.text('Fundação'), findsOneWidget);
+        expect(find.text('38'), findsOneWidget);
+        expect(find.text('Pré-Moldado'), findsOneWidget);
+        expect(find.text('84'), findsOneWidget);
+        expect(find.text('Metálica'), findsOneWidget);
+        expect(find.text('142'), findsOneWidget);
+        expect(find.text('Ver Tudo'), findsOneWidget);
+
+        // Long press em Fundação para isolar apenas fundações sob o solo
+        await tester.longPress(find.byKey(const ValueKey('stage_chip_foundation')));
+        await tester.pumpAndSettle();
+
+        expect(controller.filterFoundation, isTrue);
+        expect(controller.filterPrecast, isFalse);
+        expect(controller.filterSteel, isFalse);
+        expect(find.byKey(const ValueKey('stage_filter_active_banner')), findsOneWidget);
+        expect(find.textContaining('Isolado: Fundação (38 peças)'), findsOneWidget);
+
+        // Toque em "Restaurar Obra" no banner ativo
+        await tester.tap(find.byKey(const ValueKey('stage_filter_restore_button')));
+        await tester.pumpAndSettle();
+
+        expect(controller.isStageFilterActive, isFalse);
+        expect(controller.filterFoundation, isTrue);
+        expect(controller.filterPrecast, isTrue);
+        expect(controller.filterSteel, isTrue);
+        expect(find.byKey(const ValueKey('stage_filter_active_banner')), findsNothing);
       });
     });
   });
